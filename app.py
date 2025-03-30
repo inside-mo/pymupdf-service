@@ -201,3 +201,50 @@ def extract_outline():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
+
+@app.route('/api/extract_pages_text', methods=['POST'])
+@auth.login_required
+def extract_pages_text():
+    """
+    Extracts text from a range of pages in the uploaded PDF.
+    Expects 'pdf_file', 'page_start', and 'page_end' parameters in the form data.
+    """
+    # Retrieve the PDF file
+    if 'pdf_file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    file = request.files['pdf_file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+
+    # Retrieve and validate page_start and page_end
+    page_start = request.form.get('page_start', type=int)
+    page_end = request.form.get('page_end', type=int)
+    if page_start is None or page_end is None:
+        return jsonify({"error": "Both page_start and page_end must be provided"}), 400
+    if page_start < 1 or page_end < 1:
+        return jsonify({"error": "page_start and page_end must be positive integers"}), 400
+    if page_start > page_end:
+        return jsonify({"error": "page_start cannot be greater than page_end"}), 400
+
+    try:
+        # Open the PDF with PyMuPDF
+        pdf = fitz.open(stream=file.read(), filetype="pdf")
+        total_pages = pdf.page_count
+
+        # Adjust page_end if it exceeds the total number of pages
+        if page_end > total_pages:
+            page_end = total_pages
+
+        extracted_text = {}
+        for page_num in range(page_start, page_end + 1):
+            page = pdf.load_page(page_num - 1)  # Zero-based indexing
+            text = page.get_text()
+            extracted_text[page_num] = text
+
+        return jsonify({
+            "page_count": total_pages,
+            "extracted_text": extracted_text
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
