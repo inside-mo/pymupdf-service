@@ -121,4 +121,136 @@ def extract_images():
                 image_bytes = base_image["image"]
                 image_ext = base_image["ext"]
                 # Encode image to base64
-                encoded =
+                encoded = base64.b64encode(image_bytes).decode('utf-8')
+                images.append({
+                    "page": page_num + 1,
+                    "image_number": img_index + 1,
+                    "extension": image_ext,
+                    "data": encoded
+                })
+        return jsonify({"page_count": pdf.page_count, "images": images}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/get_metadata', methods=['POST'])
+@auth.login_required
+def get_metadata():
+    """
+    Retrieves metadata from the uploaded PDF.
+    """
+    if 'pdf_file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    file = request.files['pdf_file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    try:
+        pdf = fitz.open(stream=file.read(), filetype="pdf")
+        metadata = pdf.metadata
+        return jsonify({"metadata": metadata, "page_count": pdf.page_count}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/convert_page', methods=['POST'])
+@auth.login_required
+def convert_page():
+    """
+    Converts a specific page of the uploaded PDF to an image.
+    Expects a 'page_number' parameter in the form data.
+    """
+    if 'pdf_file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    file = request.files['pdf_file']
+    page_number = request.form.get('page_number', type=int)
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    if page_number is None:
+        return jsonify({"error": "No page_number provided"}), 400
+    try:
+        pdf = fitz.open(stream=file.read(), filetype="pdf")
+        if page_number < 1 or page_number > pdf.page_count:
+            return jsonify({"error": "Invalid page_number"}), 400
+        page = pdf.load_page(page_number - 1)
+        pix = page.get_pixmap()
+        img = Image.open(io.BytesIO(pix.tobytes()))
+        buffered = io.BytesIO()
+        img.save(buffered, format="PNG")
+        img_str = base64.b64encode(buffered.getvalue()).decode('utf-8')
+        return jsonify({"page": page_number, "image": img_str}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/extract_outline', methods=['POST'])
+@auth.login_required
+def extract_outline():
+    """
+    Extracts the outline of the uploaded PDF (chapters, sub-chapters, etc.).
+    """
+    if 'pdf_file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    file = request.files['pdf_file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    try:
+        pdf = fitz.open(stream=file.read(), filetype="pdf")
+        toc = pdf.get_toc(simple=False)  # Get the outline/toc with detailed entries
+        outline = []
+        for entry in toc:
+            # Each entry is a list: [level, title, page number]
+            outline.append({
+                "level": entry[0],
+                "title": entry[1],
+                "page_number": entry[2]
+            })
+        return jsonify({"page_count": pdf.page_count, "outline": outline}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/extract_pages_text', methods=['POST'])
+@auth.login_required
+def extract_pages_text():
+    """
+    Extracts text from a range of pages in the uploaded PDF.
+    Expects 'pdf_file', 'page_start', and 'page_end' parameters in the form data.
+    """
+    # Retrieve the PDF file
+    if 'pdf_file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    file = request.files['pdf_file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+
+    # Retrieve and validate page_start and page_end
+    page_start = request.form.get('page_start', type=int)
+    page_end = request.form.get('page_end', type=int)
+    if page_start is None or page_end is None:
+        return jsonify({"error": "Both page_start and page_end must be provided"}), 400
+    if page_start < 1 or page_end < 1:
+        return jsonify({"error": "page_start and page_end must be positive integers"}), 400
+    if page_start > page_end:
+        return jsonify({"error": "page_start cannot be greater than page_end"}), 400
+
+    try:
+        # Open the PDF with PyMuPDF
+        pdf = fitz.open(stream=file.read(), filetype="pdf")
+        total_pages = pdf.page_count
+
+        # Adjust page_end if it exceeds the total number of pages
+        if page_end > total_pages:
+            page_end = total_pages
+
+        extracted_text = {}
+        for page_num in range(page_start, page_end + 1):
+            page = pdf.load_page(page_num - 1)  # Zero-based indexing
+            text = page.get_text()
+            extracted_text[page_num] = text
+
+        return jsonify({
+            "page_count": total_pages,
+            "extracted_text": extracted_text
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
