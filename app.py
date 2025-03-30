@@ -254,3 +254,70 @@ def extract_pages_text():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
+
+@app.route('/api/extract_chapter_text', methods=['POST'])
+@auth.login_required
+def extract_chapter_text():
+    """
+    Extracts text from all pages of a specified chapter in the uploaded PDF.
+    Expects 'pdf_file' and 'chapter_title' parameters in the form data.
+    """
+    # Retrieve the PDF file
+    if 'pdf_file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    file = request.files['pdf_file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+
+    # Retrieve and validate chapter_title
+    chapter_title = request.form.get('chapter_title', type=str)
+    if not chapter_title:
+        return jsonify({"error": "No chapter_title provided"}), 400
+
+    try:
+        # Open the PDF with PyMuPDF
+        pdf = fitz.open(stream=file.read(), filetype="pdf")
+        toc = pdf.get_toc(simple=False)  # Retrieve the outline with detailed entries
+        
+        # Find the chapter in the table of contents
+        chapter_entry = None
+        for entry in toc:
+            # Each entry is a list: [level, title, page number]
+            level, title, page_number = entry
+            if title.strip().lower() == chapter_title.strip().lower():
+                chapter_entry = entry
+                break
+
+        if not chapter_entry:
+            return jsonify({"error": f"Chapter titled '{chapter_title}' not found in the PDF."}), 404
+
+        chapter_start_page = chapter_entry[2]
+        
+        # Determine the end page
+        # Find the next entry with the same or higher level
+        chapter_level = chapter_entry[0]
+        chapter_end_page = pdf.page_count  # Default to last page
+        
+        for entry in toc:
+            current_level, current_title, current_page = entry
+            if current_page > chapter_start_page:
+                if current_level <= chapter_level:
+                    chapter_end_page = current_page - 1
+                    break
+
+        # Extract text from chapter_start_page to chapter_end_page
+        extracted_text = {}
+        for page_num in range(chapter_start_page, chapter_end_page + 1):
+            page = pdf.load_page(page_num - 1)  # Zero-based indexing
+            text = page.get_text()
+            extracted_text[page_num] = text
+
+        return jsonify({
+            "chapter": chapter_title,
+            "page_start": chapter_start_page,
+            "page_end": chapter_end_page,
+            "extracted_text": extracted_text
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
