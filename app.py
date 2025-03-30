@@ -10,8 +10,10 @@ app = Flask(__name__)
 
 auth = HTTPBasicAuth()
 
+import os
+
 users = {
-    "admin": generate_password_hash("your-secure-password")
+    os.environ.get("API_USERNAME"): generate_password_hash(os.environ.get("API_PASSWORD"))
 }
 
 @auth.verify_password
