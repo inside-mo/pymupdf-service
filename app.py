@@ -327,26 +327,48 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-@app.route('/extract-pages', methods=['POST'])
+@app.route('/api/extract_pages', methods=['POST'])
+@auth.login_required
 def extract_pages():
-    data = request.json
-    input_pdf = data['input_pdf']
-    start_page = data['start_page']
-    end_page = data['end_page']
+    """
+    Extracts text from a range of pages in the uploaded PDF.
+    Expects 'pdf_file', 'page_start', and 'page_end' parameters in the form data.
+    """
+    if 'pdf_file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    file = request.files['pdf_file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
 
-    # Open the input PDF
-    doc = fitz.open(input_pdf)
-    
-    extracted_text = ""
-    
-    # Loop through the specified page range
-    for page_number in range(start_page, end_page + 1):  # Adjust for inclusive range
-        page = doc[page_number]
-        extracted_text += page.get_text()  # Extract text
+    # Retrieve and validate page_start and page_end
+    page_start = request.form.get('page_start', type=int)
+    page_end = request.form.get('page_end', type=int)
+    if page_start is None or page_end is None:
+        return jsonify({"error": "Both page_start and page_end must be provided"}), 400
+    if page_start < 1 or page_end < 1:
+        return jsonify({"error": "page_start and page_end must be positive integers"}), 400
+    if page_start > page_end:
+        return jsonify({"error": "page_start cannot be greater than page_end"}), 400
 
-    doc.close()
-    
-    return jsonify({"status": "success", "extracted_text": extracted_text}), 200
+    try:
+        # Open the PDF with PyMuPDF
+        pdf = fitz.open(stream=file.read(), filetype="pdf")
+        total_pages = pdf.page_count
 
-if __name__ == '__main__':
-    app.run(debug=True)
+        # Adjust page_end if it exceeds total_pages
+        if page_end > total_pages:
+            page_end = total_pages
+        
+        extracted_text = {}
+        for page_num in range(page_start, page_end + 1):
+            page = pdf.load_page(page_num - 1)  # Zero-based indexing
+            text = page.get_text()
+            extracted_text[page_num] = text
+        
+        return jsonify({
+            "page_count": total_pages,
+            "extracted_text": extracted_text
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
