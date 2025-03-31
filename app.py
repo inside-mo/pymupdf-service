@@ -87,4 +87,89 @@ def extract_text():
         for page_num in range(pdf.page_count):
             page = pdf.load_page(page_num)
             text += page.get_text()
-        return jsonify({"page_count": pdf.page
+        return jsonify({"page_count": pdf.page_count, "text": text}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/extract_images', methods=['POST'])
+@auth.login_required
+def extract_images():
+    if 'pdf_file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    file = request.files['pdf_file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    try:
+        pdf = fitz.open(stream=file.read(), filetype="pdf")
+        images = []
+        for page_num in range(pdf.page_count):
+            page = pdf.load_page(page_num)
+            image_list = page.get_images(full=True)
+            for img_index, img in enumerate(image_list):
+                xref = img[0]
+                base_image = pdf.extract_image(xref)
+                image_bytes = base_image["image"]
+                image_ext = base_image["ext"]
+                encoded = base64.b64encode(image_bytes).decode('utf-8')
+                images.append({
+                    "page": page_num + 1,
+                    "image_number": img_index + 1,
+                    "extension": image_ext,
+                    "data": encoded
+                })
+        return jsonify({"page_count": pdf.page_count, "images": images}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/get_metadata', methods=['POST'])
+@auth.login_required
+def get_metadata():
+    if 'pdf_file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    file = request.files['pdf_file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    try:
+        pdf = fitz.open(stream=file.read(), filetype="pdf")
+        metadata = pdf.metadata
+        return jsonify({"metadata": metadata, "page_count": pdf.page_count}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/extract_pages', methods=['POST'])
+@auth.login_required
+def extract_pages():
+    if 'pdf_file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    file = request.files['pdf_file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    
+    page_start = request.form.get('page_start', type=int)
+    page_end = request.form.get('page_end', type=int)
+    if page_start is None or page_end is None:
+        return jsonify({"error": "Both page_start and page_end must be provided"}), 400
+    if page_start < 1 or page_end < 1:
+        return jsonify({"error": "page_start and page_end must be positive integers"}), 400
+    if page_start > page_end:
+        return jsonify({"error": "page_start cannot be greater than page_end"}), 400
+    
+    try:
+        pdf = fitz.open(stream=file.read(), filetype="pdf")
+        total_pages = pdf.page_count
+        
+        if page_end > total_pages:  # Adjust if page_end exceeds total pages
+            page_end = total_pages
+            
+        extracted_text = {}
+        for page_num in range(page_start, page_end + 1):
+            page = pdf.load_page(page_num - 1)  # Zero-based indexing
+            extracted_text[page_num] = page.get_text()
+        
+        return jsonify({"page_count": total_pages, "extracted_text": extracted_text}), 200
+    
+    except Exception as e:
+        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True)
