@@ -321,3 +321,32 @@ def extract_chapter_text():
 
     except Exception as e:
         return jsonify({"error": f"An error occurred: {str(e)}"}), 500
+
+import fitz  # PyMuPDF
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+
+@app.route('/extract-pages', methods=['POST'])
+def extract_pages():
+    data = request.json
+    input_pdf = data['input_pdf']
+    start_page = data['start_page']
+    end_page = data['end_page']
+
+    # Open the input PDF
+    doc = fitz.open(input_pdf)
+    
+    extracted_text = ""
+    
+    # Loop through the specified page range
+    for page_number in range(start_page, end_page + 1):  # Adjust for inclusive range
+        page = doc[page_number]
+        extracted_text += page.get_text()  # Extract text
+
+    doc.close()
+    
+    return jsonify({"status": "success", "extracted_text": extracted_text}), 200
+
+if __name__ == '__main__':
+    app.run(debug=True)
