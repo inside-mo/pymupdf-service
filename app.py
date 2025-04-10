@@ -174,12 +174,28 @@ def extract_outline():
         pdf = fitz.open(stream=file.read(), filetype="pdf")
         toc = pdf.get_toc(simple=False)  # Get the outline/toc with detailed entries
         outline = []
-        for entry in toc:
+        
+        for i, entry in enumerate(toc):
+            title = entry[1]
+            start_page = entry[2]
+            end_page = None
+            
+            # Determine the end page by looking at the next entry's start page
+            if i + 1 < len(toc):
+                next_start_page = toc[i + 1][2]
+                end_page = next_start_page - 1  # End page is just before the next title
+            
+            # If entry is the last one, set end page to the last page of the PDF
+            if i + 1 == len(toc):
+                end_page = pdf.page_count
+            
             outline.append({
                 "level": entry[0],
-                "title": entry[1],
-                "page_number": entry[2]
+                "title": title,
+                "start_page": start_page,
+                "end_page": end_page
             })
+        
         return jsonify({"page_count": pdf.page_count, "outline": outline}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
