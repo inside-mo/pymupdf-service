@@ -200,39 +200,41 @@ def extract_outline():
         pdf = fitz.open(stream=file.read(), filetype="pdf")
         toc = pdf.get_toc(simple=False)  # Get the outline/toc with detailed entries
         outline = []
-
+        
         for i, entry in enumerate(toc):
             title = entry[1]
             start_page = entry[2]
             end_page = None
-
+            
             if i + 1 < len(toc):
                 next_start_page = toc[i + 1][2]  # The start page of the next chapter
+                next_title = toc[i + 1][1]  # The title of the next chapter
                 
-                # Load the current chapter's page
-                current_page = pdf.load_page(start_page - 1)  # 0-based index
-                current_text = current_page.get_text("text").strip()
-                lines = current_text.split('\n')  # Split text into lines
-
-                # Check if the next chapter starts on the same page as the current chapter
+                # Case 1: If the next chapter starts on the same page
                 if next_start_page == start_page:
-                    title_found = False
-
-                    for line in lines:
-                        if title in line:  # Check for the chapter title
-                            title_found = True
-                            break
-                        elif line.strip():  # Any preceding non-empty line indicates content
-                            end_page = start_page  # Set end page to current if there's text above
-                            break
-
-                    if not title_found:  # If title is not found, skip this chapter
-                        continue  # This page is neither a start nor an end for a chapter
+                    end_page = start_page  # Simply set end page to current page
                 
+                # Case 2: If the next chapter starts on a different page
                 else:
-                    # The next chapter starts on a different page
-                    end_page = next_start_page - 1  # Default end page before the next chapter
-
+                    # Load the next chapter's start page
+                    next_page = pdf.load_page(next_start_page - 1)  # 0-based index
+                    next_page_text = next_page.get_text("text").strip()
+                    next_page_lines = next_page_text.split('\n')
+                    
+                    # Check for text above the next chapter's title
+                    text_above_title = False
+                    for line in next_page_lines:
+                        if next_title in line:  # Found the next chapter's title
+                            break
+                        if line.strip():  # Found text above the title
+                            text_above_title = True
+                            break
+                    
+                    if text_above_title:
+                        end_page = next_start_page  # Set to current page if text exists above
+                    else:
+                        end_page = next_start_page - 1  # Set to previous page if no text above
+            
             else:
                 # For the last chapter; set end to total pages of the document
                 end_page = pdf.page_count
@@ -247,12 +249,11 @@ def extract_outline():
                 "start_page": start_page,
                 "end_page": end_page
             })
-
-        return jsonify({"page_count": pdf.page_count, "outline": outline}), 200
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
         
+        return jsonify({"page_count": pdf.page_count, "outline": outline}), 200
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500        
 @app.route('/api/extract_pages_text', methods=['POST'])
 @auth.login_required
 def extract_pages_text():
