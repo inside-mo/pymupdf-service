@@ -200,46 +200,46 @@ def extract_outline():
         pdf = fitz.open(stream=file.read(), filetype="pdf")
         toc = pdf.get_toc(simple=False)  # Get the outline/toc with detailed entries
         outline = []
-
+        
         for i, entry in enumerate(toc):
             title = entry[1]
             start_page = entry[2]
             end_page = None
-
+            
             if i + 1 < len(toc):
-                next_start_page = toc[i + 1][2]  # Get the start page of the next chapter
-                current_page = pdf.load_page(start_page - 1)  # Load current page (0-based index)
+                next_start_page = toc[i + 1][2]  # The start page of the next chapter
+                
+                # Load the current chapter's page
+                current_page = pdf.load_page(start_page - 1)  # 0-based index
                 current_text = current_page.get_text("text").strip()
-                lines = current_text.split('\n')  # Split the current page text into lines
+                lines = current_text.split('\n')
 
-                title_found = False
-                text_above_title = False
-
-                # Check for the title and any text above it
-                for line in lines:
-                    if title in line:  # Check if we have found the chapter title
-                        title_found = True
-                        break
-                    elif line.strip():  # If there's any preceding non-empty line
-                        text_above_title = True  # Indicates there is content above the title
-
-                if title_found:
-                    if text_above_title:
-                        end_page = start_page  # End page is the same as the current page if text is above
-                    else:
-                        end_page = start_page - 1  # End page is the previous page if no text is above
+                # Check if the next chapter starts on the same page as the current chapter
+                if next_start_page == start_page:
+                    # Check if there's any text in the current page before the title
+                    title_found = False
+                    for line in lines:
+                        if title in line and not title_found:
+                            title_found = True  # We found the chapter title
+                            break
+                        # If title_found is True, that means there was text above it
+                        if title_found:
+                            end_page = start_page  # End page is the same as start page
+                            break
+                    
+                    if end_page is None:  # If no text was detected above the title
+                        end_page = start_page  # It stays as the current page for same-page titles
                 else:
-                    continue  # If no title found, we skip this iteration
+                    end_page = next_start_page - 1  # Ends just before the next chapter starts
 
             else:
-                # For the last chapter; set end to the total number of pages in the document
+                # For the last entry; set end to total pages of the document
                 end_page = pdf.page_count
             
-            # Ensure that end page is not before start page
-            if end_page is not None and end_page < start_page:
+            # Ensure end page is not before start page
+            if end_page < start_page:
                 end_page = start_page
             
-            # Append the chapter details to the outline
             outline.append({
                 "level": entry[0],
                 "title": title,
