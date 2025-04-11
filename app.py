@@ -174,20 +174,27 @@ def extract_outline():
         pdf = fitz.open(stream=file.read(), filetype="pdf")
         toc = pdf.get_toc(simple=False)  # Get the outline/toc with detailed entries
         outline = []
-        
+
         for i, entry in enumerate(toc):
             title = entry[1]
             start_page = entry[2]
             end_page = None
             
-            # Determine the end page by looking at the next entry's start page
             if i + 1 < len(toc):
                 next_start_page = toc[i + 1][2]
-                end_page = next_start_page - 1  # End page is just before the next title
-            
-            # If entry is the last one, set end page to the last page of the PDF
-            if i + 1 == len(toc):
+                
+                # Here, we check if the current chapter's end should be the same as the start of the next chapter
+                if start_page == next_start_page:
+                    end_page = start_page  # The chapter ends on the same page it starts
+                else:
+                    end_page = next_start_page - 1  # End page is before the next chapter's start page
+            else:
+                # For the last chapter in the TOC, set end page to the last page of the document
                 end_page = pdf.page_count
+            
+            # Ensure that the end page is not before the start page, adjust if needed
+            if end_page < start_page:
+                end_page = start_page
             
             outline.append({
                 "level": entry[0],
