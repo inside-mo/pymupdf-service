@@ -212,35 +212,31 @@ def extract_outline():
                 # Load the current chapter's page
                 current_page = pdf.load_page(start_page - 1)  # 0-based index
                 current_text = current_page.get_text("text").strip()
-                
+                lines = current_text.split('\n')
+
                 # Check if the next chapter starts on the same page as the current chapter
                 if next_start_page == start_page:
-                    # Check for 'normal' text above the chapter title
-                    lines = current_text.split('\n')
+                    # Check if there's any text in the current page before the title
                     title_found = False
-                    
-                    # Searching for the title in the text lines
                     for line in lines:
-                        if title in line:
+                        if title in line and not title_found:
                             title_found = True  # We found the chapter title
                             break
-                        
-                        # If normal text is found above the title in the current page
-                        if title_found and line.strip():
-                            end_page = next_start_page  # The current chapter ends on this page
+                        # If title_found is True, that means there was text above it
+                        if title_found:
+                            end_page = start_page  # End page is the same as start page
                             break
                     
-                    if end_page is None:  # If no text was identified above the title
-                        end_page = start_page  # Assume it ends on the same start page
+                    if end_page is None:  # If no text was detected above the title
+                        end_page = start_page  # It stays as the current page for same-page titles
                 else:
-                    # Standard case: 
-                    end_page = next_start_page - 1  # Chapter ends just before the next starts
+                    end_page = next_start_page - 1  # Ends just before the next chapter starts
 
             else:
-                # Last entry; set end to total pages of the document
+                # For the last entry; set end to total pages of the document
                 end_page = pdf.page_count
             
-            # Ensure that the end page is not before the start page
+            # Ensure end page is not before start page
             if end_page < start_page:
                 end_page = start_page
             
