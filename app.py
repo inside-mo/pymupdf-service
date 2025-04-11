@@ -74,9 +74,9 @@ def upload_file():
                 return f"An error occurred while processing the PDF: {str(e)}", 500
     return render_template_string(HTML_TEMPLATE)
 
-@app.route('/api/extract_pages_text', methods=['POST'])
+@app.route('/api/extract_text', methods=['POST'])
 @auth.login_required
-def extract_pages_text():
+def extract_text():
     # Retrieve the PDF file
     if 'pdf_file' not in request.files:
         return jsonify({"error": "No file part"}), 400
