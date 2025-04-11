@@ -207,29 +207,29 @@ def extract_outline():
             end_page = None
             
             if i + 1 < len(toc):
-                next_start_page = toc[i + 1][2]
+                next_start_page = toc[i + 1][2]  # Next chapter's start page
 
-                # If the next chapter starts on the same page as the current chapter
+                # Load the current chapter's page
+                current_page = pdf.load_page(start_page - 1)  # Current page (0-based index)
+                current_text = current_page.get_text("text").strip()  # Text from current page
+            
                 if next_start_page == start_page:
-                    # Load the current page to check for preceding text
-                    current_page = pdf.load_page(start_page - 1)  # 0-based index
-                    if current_page.get_text("text").strip():  # Text exists in the current chapter
-                        end_page = start_page  # Current chapter ends on the same page
+                    # If both chapters start on the same page, we need to check if text continues
+                    # Load the next chapter's page
+                    next_page = pdf.load_page(next_start_page - 1)  # Next chapter's page (0-based index)
+                    next_text = next_page.get_text("text").strip()  # Text from next chapter's start page
+
+                    # Determine the effective end page
+                    if next_text:  # If next chapter starts with text
+                        end_page = next_start_page  # Ends at the beginning of the next chapter
                     else:
-                        end_page = next_start_page - 1  # Ends just before the next chapter starts
+                        end_page = start_page  # Ends on the current page
                 else:
-                    # Check if current chapter ends before the next starts
-                    end_page = next_start_page - 1  # Current chapter ends just before next chapter
-
-                    # Load the next start page to see if it overlaps with the current content
-                    next_page = pdf.load_page(next_start_page - 1)  # Next chapter's page
-                    if next_page.get_text("text").strip():
-                        end_page = next_start_page - 1  # Adjust end page if next has text
-                    else:
-                        end_page = next_start_page - 1  # No content on the next_start_page
-
+                    # Overall process for next start page being different from the current
+                    end_page = next_start_page - 1  # Ends before the next chapter starts
+            
             else:
-                # Last entry; set end page to total pages of the document
+                # Last chapter, set end to total pages of the document
                 end_page = pdf.page_count
             
             # Ensure end page is not before start page
