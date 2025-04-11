@@ -180,24 +180,23 @@ def extract_outline():
             start_page = entry[2]
             end_page = None
             
+            # Check the next entry to determine the end page
             if i + 1 < len(toc):
                 next_start_page = toc[i + 1][2]
-                
-                # Adjust end_page logic
+
+                # If the next chapter starts on the same page as the current chapter
                 if next_start_page == start_page:
-                    # If the next chapter starts on the same page as the current chapter
-                    end_page = start_page  # Current chapter ends on the same page
+                    end_page = start_page  # Ends on the same page it starts
                 else:
-                    end_page = next_start_page - 1  # Current chapter ends before the next chapter starts
+                    end_page = next_start_page - 1  # Ends just before the next chapter starts
             else:
-                # If it's the last entry in the TOC, set the end page to the last page of the document
+                # Last chapter, set end to total pages of the document
                 end_page = pdf.page_count
-            
-            # Ensure end page is not before the start page
+
+            # Ensure end page is not before start page
             if end_page < start_page:
                 end_page = start_page
             
-            # Append to outline
             outline.append({
                 "level": entry[0],
                 "title": title,
