@@ -211,37 +211,39 @@ def extract_outline():
                 
                 # Load the current chapter's page
                 current_page = pdf.load_page(start_page - 1)  # 0-based index
-                current_text = current_page.get_text("text")
+                current_text = current_page.get_text("text").strip()
                 
                 # Check if the next chapter starts on the same page as the current chapter
                 if next_start_page == start_page:
-                    # Evaluate the text on the current page for "normal" content above the title
+                    # Check for 'normal' text above the chapter title
                     lines = current_text.split('\n')
                     title_found = False
                     
+                    # Searching for the title in the text lines
                     for line in lines:
                         if title in line:
                             title_found = True  # We found the chapter title
                             break
-                        if title_found and line.strip():  # If we found a non-empty line above the title
-                            # If we find a line before it that has text, it indicates it belongs to the previous chapter
-                            end_page = start_page  # Ends on the same page if normal text exists
+                        
+                        # If normal text is found above the title in the current page
+                        if title_found and line.strip():
+                            end_page = next_start_page  # The current chapter ends on this page
                             break
                     
-                    if end_page is None:  # If we did not find "normal" text above the chapter title
-                        end_page = next_start_page - 1  # If no content above, end just before next chapter starts
-                    
+                    if end_page is None:  # If no text was identified above the title
+                        end_page = start_page  # Assume it ends on the same start page
                 else:
-                    end_page = next_start_page - 1  # Normal case, ends just before the next chapter starts
+                    # Standard case: 
+                    end_page = next_start_page - 1  # Chapter ends just before the next starts
 
             else:
                 # Last entry; set end to total pages of the document
                 end_page = pdf.page_count
-
-            # Ensure end page is not before start page
+            
+            # Ensure that the end page is not before the start page
             if end_page < start_page:
                 end_page = start_page
-
+            
             outline.append({
                 "level": entry[0],
                 "title": title,
