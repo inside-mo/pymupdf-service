@@ -211,22 +211,24 @@ def extract_outline():
 
                 # If the next chapter starts on the same page as the current chapter
                 if next_start_page == start_page:
-                    # Assume it ends on the same page, but check if text exists on the next page
-                    page = pdf.load_page(start_page - 1)  # Load current chapter's page (0-based index)
-                    next_page_has_text = pdf.get_textpage(next_start_page - 1).get_text().strip()  # Check next start page text
+                    # Check if the next page has text
+                    # Load the current chapter's page (0-based index)
+                    current_page = pdf.load_page(start_page - 1)
+                    # Check if the next page (1-based, hence next_start_page - 1) has text
+                    next_page_text = pdf.get_textpage(next_start_page - 1).get_text().strip()
 
-                    if next_page_has_text:  # If there is text on the next page, this chapter only ends on this page
-                        end_page = start_page  # Only occupies the same page
+                    if next_page_text:  # Text exists on the next chapter's start page
+                        end_page = start_page  # The current chapter ends on this page
                     else:
-                        end_page = next_start_page - 1  # Ends before the next chapter starts
+                        end_page = next_start_page - 1  # Ends just before the next chapter starts
                 else:
                     end_page = next_start_page - 1  # Ends just before the next chapter starts
             
             else:
-                # For the last entry, set end to total pages of the document
+                # Last entry; set end to total pages of the document
                 end_page = pdf.page_count
             
-            # Ensure end page is not before start page
+            # Ensure end page is not before the start page
             if end_page < start_page:
                 end_page = start_page
             
@@ -241,7 +243,6 @@ def extract_outline():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 @app.route('/api/extract_pages_text', methods=['POST'])
 @auth.login_required
 def extract_pages_text():
