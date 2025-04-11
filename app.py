@@ -211,13 +211,10 @@ def extract_outline():
 
                 # If the next chapter starts on the same page as the current chapter
                 if next_start_page == start_page:
-                    # Check if the next page has text
                     # Load the current chapter's page (0-based index)
-                    current_page = pdf.load_page(start_page - 1)
-                    # Check if the next page (1-based, hence next_start_page - 1) has text
-                    next_page_text = pdf.get_textpage(next_start_page - 1).get_text().strip()
-
-                    if next_page_text:  # Text exists on the next chapter's start page
+                    page = pdf.load_page(start_page - 1)
+                    # Check if the current page has any text; if yes it ends on that page
+                    if page.get_text("text").strip():
                         end_page = start_page  # The current chapter ends on this page
                     else:
                         end_page = next_start_page - 1  # Ends just before the next chapter starts
@@ -243,6 +240,7 @@ def extract_outline():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 @app.route('/api/extract_pages_text', methods=['POST'])
 @auth.login_required
 def extract_pages_text():
