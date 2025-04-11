@@ -205,39 +205,40 @@ def extract_outline():
             title = entry[1]
             start_page = entry[2]
             end_page = None
-            
+
             if i + 1 < len(toc):
                 next_start_page = toc[i + 1][2]  # The start page of the next chapter
-                
-                # Load the current chapter's page
-                current_page = pdf.load_page(start_page - 1)  # 0-based index
+                current_page = pdf.load_page(start_page - 1)  # Load current page (0-based index)
                 current_text = current_page.get_text("text").strip()
-                lines = current_text.split('\n')
+                lines = current_text.split('\n')  # Split the current page text into lines
+                
+                title_found = False
+                text_above_title = False
 
-                # Check if the next chapter starts on the same page as the current chapter
-                if next_start_page == start_page:
-                    # Check if there's any text in the current page before the title
-                    title_found = False
-                    for line in lines:
-                        if title in line and not title_found:
-                            title_found = True  # We found the chapter title
-                            break
-                        # If title_found is True, that means there was text above it
-                        if title_found:
-                            end_page = start_page  # End page is the same as start page
-                            break
-                    
-                    if end_page is None:  # If no text was detected above the title
-                        end_page = start_page  # It stays as the current page for same-page titles
+                # Check for the title and text above it
+                for line in lines:
+                    if title in line:
+                        title_found = True
+                        break
+                    elif line.strip():  # If we find any non-empty line before the title, there is text above it
+                        text_above_title = True
+                
+                # Set the end page based on the logic
+                if title_found:
+                    if text_above_title:
+                        end_page = start_page  # End page is the same as start page if there is text above
+                    else:
+                        end_page = start_page - 1  # End page is on the previous page if no text above
                 else:
-                    end_page = next_start_page - 1  # Ends just before the next chapter starts
-
+                    # If no title is found, continue without setting an end page
+                    continue
+            
             else:
                 # For the last entry; set end to total pages of the document
                 end_page = pdf.page_count
             
             # Ensure end page is not before start page
-            if end_page < start_page:
+            if end_page is not None and end_page < start_page:
                 end_page = start_page
             
             outline.append({
