@@ -191,42 +191,51 @@ def convert_page():
 @app.route('/api/extract_outline', methods=['POST'])
 @auth.login_required
 def extract_outline():
-if 'pdf_file' not in request.files:
-return jsonify({"error": "No file part"}), 400
-file = request.files['pdf_file']
-if file.filename == '':
-return jsonify({"error": "No selected file"}), 400
-try:
-pdf = fitz.open(stream=file.read(), filetype="pdf")
-toc = pdf.get_toc(simple=False) # Get the outline/toc with detailed entries
-outline = []
-for i, entry in enumerate(toc):
-title = entry[1]
-start_page = entry[2]
-end_page = None
-# Check the next entry to determine the end page
-if i + 1 < len(toc):
-next_start_page = toc[i + 1][2]
-# If the next chapter starts on the same page as the current chapter
-if next_start_page == start_page:
-end_page = start_page # Ends on the same page it starts
-else:
-end_page = next_start_page - 1 # Ends just before the next chapter starts
-else:
-# Last chapter, set end to total pages of the document
-end_page = pdf.page_count
-# Ensure end page is not before start page
-if end_page < start_page:
-end_page = start_page
-outline.append({
-"level": entry[0],
-"title": title,
-"start_page": start_page,
-"end_page": end_page
-})
-return jsonify({"page_count": pdf.page_count, "outline": outline}), 200
-except Exception as e:
-return jsonify({"error": str(e)}), 500
+    if 'pdf_file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    file = request.files['pdf_file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    
+    try:
+        pdf = fitz.open(stream=file.read(), filetype="pdf")
+        toc = pdf.get_toc(simple=False)  # Get the outline/toc with detailed entries
+        outline = []
+        
+        for i, entry in enumerate(toc):
+            title = entry[1]
+            start_page = entry[2]
+            end_page = None
+            
+            # Check the next entry to determine the end page
+            if i + 1 < len(toc):
+                next_start_page = toc[i + 1][2]
+                
+                # If the next chapter starts on the same page as the current chapter
+                if next_start_page == start_page:
+                    end_page = start_page  # Ends on the same page it starts
+                else:
+                    end_page = next_start_page - 1  # Ends just before the next chapter starts
+            else:
+                # Last chapter; set end to total pages of the document
+                end_page = pdf.page_count
+            
+            # Ensure end page is not before start page
+            if end_page < start_page:
+                end_page = start_page
+            
+            outline.append({
+                "level": entry[0],
+                "title": title,
+                "start_page": start_page,
+                "end_page": end_page
+            })
+        
+        return jsonify({"page_count": pdf.page_count, "outline": outline}), 200
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/extract_pages_text', methods=['POST'])
 @auth.login_required
 def extract_pages_text():
