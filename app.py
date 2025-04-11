@@ -183,19 +183,21 @@ def extract_outline():
             if i + 1 < len(toc):
                 next_start_page = toc[i + 1][2]
                 
-                # Here, we check if the current chapter's end should be the same as the start of the next chapter
-                if start_page == next_start_page:
-                    end_page = start_page  # The chapter ends on the same page it starts
+                # Adjust end_page logic
+                if next_start_page == start_page:
+                    # If the next chapter starts on the same page as the current chapter
+                    end_page = start_page  # Current chapter ends on the same page
                 else:
-                    end_page = next_start_page - 1  # End page is before the next chapter's start page
+                    end_page = next_start_page - 1  # Current chapter ends before the next chapter starts
             else:
-                # For the last chapter in the TOC, set end page to the last page of the document
+                # If it's the last entry in the TOC, set the end page to the last page of the document
                 end_page = pdf.page_count
             
-            # Ensure that the end page is not before the start page, adjust if needed
+            # Ensure end page is not before the start page
             if end_page < start_page:
                 end_page = start_page
             
+            # Append to outline
             outline.append({
                 "level": entry[0],
                 "title": title,
@@ -204,6 +206,7 @@ def extract_outline():
             })
         
         return jsonify({"page_count": pdf.page_count, "outline": outline}), 200
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
