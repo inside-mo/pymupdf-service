@@ -74,6 +74,32 @@ def upload_file():
                 return f"An error occurred while processing the PDF: {str(e)}", 500
     return render_template_string(HTML_TEMPLATE)
 
+@app.route('/api/extract_markdown', methods=['POST'])
+@auth.login_required
+def extract_markdown():
+    if 'pdf_file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    file = request.files['pdf_file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    
+    try:
+        pdf = fitz.open(stream=file.read(), filetype="pdf")
+        markdown_text = ""
+        
+        for page_num in range(pdf.page_count):
+            page = pdf.load_page(page_num)
+            markdown_text += page.get_text("markdown")
+            markdown_text += "\n\n"  # Add spacing between pages
+        
+        return jsonify({
+            "page_count": pdf.page_count,
+            "markdown_text": markdown_text
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+        
 @app.route('/api/extract_text', methods=['POST'])
 @auth.login_required
 def extract_text():
