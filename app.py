@@ -110,14 +110,15 @@ def extract_random_pages():
         return jsonify({"error": "No file part"}), 400
     
     file = request.files['pdf_file']
-    pages = request.form.getlist('pages[]', type=int)  # Gets array of page numbers
+    pages_str = request.form.get('pages', '')  # Get as string like "1,3,7"
+    pages = [int(p) for p in pages_str.split(',')] if pages_str else []
     
     try:
         pdf = fitz.open(stream=file.read(), filetype="pdf")
         extracted_text = {}
         
         for page_num in pages:
-            page = pdf.load_page(page_num-1)  # Convert to 0-based index
+            page = pdf.load_page(page_num-1)
             extracted_text[page_num] = page.get_text()
         
         return jsonify({
