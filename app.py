@@ -351,34 +351,58 @@ def extract_pages_text():
 def extract_pages():
     if 'pdf_file' not in request.files:
         return jsonify({"error": "No file part"}), 400
+    
     file = request.files['pdf_file']
     if file.filename == '':
         return jsonify({"error": "No selected file"}), 400
+
+    # Check which method is being used (range or specific pages)
     page_start = request.form.get('page_start', type=int)
     page_end = request.form.get('page_end', type=int)
-    if page_start is None or page_end is None:
-        return jsonify({"error": "Both page_start and page_end must be provided"}), 400
-    if page_start < 1 or page_end < 1:
-        return jsonify({"error": "page_start and page_end must be positive integers"}), 400
-    if page_start > page_end:
-        return jsonify({"error": "page_start cannot be greater than page_end"}), 400
+    pages_str = request.form.get('pages', '')
+
     try:
-        # Open the original PDF
         pdf = fitz.open(stream=file.read(), filetype="pdf")
         total_pages = pdf.page_count
-        # Adjust page_end if it exceeds total_pages
-        if page_end > total_pages:
-            page_end = total_pages
-        # Create a new PDF to hold the extracted pages
         new_pdf = fitz.open()
-        for page_num in range(page_start, page_end + 1):
-            new_pdf.insert_pdf(pdf, from_page=page_num - 1, to_page=page_num - 1)  # Zero-based indexing
-        # Prepare the PDF to be returned
+
+        # Handle page range method
+        if page_start and page_end:
+            if page_start < 1 or page_end < 1:
+                return jsonify({"error": "page_start and page_end must be positive integers"}), 400
+            if page_start > page_end:
+                return jsonify({"error": "page_start cannot be greater than page_end"}), 400
+            
+            page_end = min(page_end, total_pages)
+            pages = range(page_start, page_end + 1)
+
+        # Handle specific pages method
+        elif pages_str:
+            pages = [int(p) for p in pages_str.split(',')]
+            if not all(p > 0 for p in pages):
+                return jsonify({"error": "All page numbers must be positive integers"}), 400
+        
+        else:
+            return jsonify({"error": "Either page range or specific pages must be provided"}), 400
+
+        # Extract pages
+        for page_num in pages:
+            if page_num <= total_pages:
+                new_pdf.insert_pdf(pdf, from_page=page_num-1, to_page=page_num-1)
+
+        # Prepare PDF for return
         pdf_stream = io.BytesIO()
-        new_pdf.save(pdf_stream)  # Save to an in-memory stream
+        new_pdf.save(pdf_stream)
         new_pdf.close()
-        pdf_stream.seek(0)  # Reset stream position to the beginning
-        return send_file(pdf_stream, as_attachment=True, download_name="extracted_pages.pdf", mimetype='application/pdf')
+        pdf_stream.seek(0)
+
+        return send_file(
+            pdf_stream,
+            as_attachment=True,
+            download_name="extracted_pages.pdf",
+            mimetype='application/pdf'
+        )
+
     except Exception as e:
         return jsonify({"error": f"An error occurred: {str(e)}"}), 500
 
