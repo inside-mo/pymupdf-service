@@ -99,6 +99,34 @@ def extract_markdown():
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+import fitz
+from flask import Flask, request, jsonify
+
+@app.route('/api/extract_random_pages', methods=['POST'])
+@auth.login_required
+def extract_random_pages():
+    if 'pdf_file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    
+    file = request.files['pdf_file']
+    pages = request.form.getlist('pages[]', type=int)  # Gets array of page numbers
+    
+    try:
+        pdf = fitz.open(stream=file.read(), filetype="pdf")
+        extracted_text = {}
+        
+        for page_num in pages:
+            page = pdf.load_page(page_num-1)  # Convert to 0-based index
+            extracted_text[page_num] = page.get_text()
+        
+        return jsonify({
+            "page_count": pdf.page_count,
+            "extracted_text": extracted_text
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
         
 @app.route('/api/extract_text', methods=['POST'])
 @auth.login_required
