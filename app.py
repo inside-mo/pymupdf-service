@@ -406,5 +406,60 @@ def extract_pages():
     except Exception as e:
         return jsonify({"error": f"An error occurred: {str(e)}"}), 500
 
+@app.route('/api/extract_table_data', methods=['POST'])
+@auth.login_required
+def extract_table_data():
+    if 'pdf_file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    file = request.files['pdf_file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+
+    try:
+        pdf = fitz.open(stream=file.read(), filetype="pdf")
+        table_data = []
+
+        for page_num in range(pdf.page_count):
+            page = pdf.load_page(page_num)
+            # Extract text blocks with layout information
+            blocks = page.get_text("blocks")
+
+            # --- Heuristic Table Detection and Data Extraction (Adapt this!) ---
+            # This is a simplified example and WILL require customization
+            # based on the specific structure of your tables.
+
+            # Example: Assuming tables are defined by consistent vertical alignment
+            # and a minimum number of columns
+
+            potential_table = [] # List of rows
+            current_row = []
+            last_y = None # Track vertical position
+
+            for block in blocks:
+                x0, y0, x1, y1, text, block_no = block
+                #print(f"Block: {text}, y0: {y0}")  #Debugging
+
+                if last_y is None or abs(y0 - last_y) < 5: # Adjust tolerance as needed
+                    current_row.append(text.strip())
+                else:
+                    #New row starts, save previous if not empty
+                    if current_row:
+                        potential_table.append(current_row)
+                    current_row = [text.strip()]
+
+                last_y = y0
+            if current_row: #Append the last row
+                potential_table.append(current_row)
+
+            #Filter out tables with too few rows or columns
+            if len(potential_table)>2 and len(potential_table[0]) > 1:
+              table_data.append({"page": page_num + 1, "table": potential_table})
+
+
+        return jsonify({"page_count": pdf.page_count, "tables": table_data}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
