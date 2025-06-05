@@ -82,53 +82,41 @@ def extract_markdown():
     file = request.files['pdf_file']
     if file.filename == '':
         return jsonify({"error": "No selected file"}), 400
-    
     try:
         pdf = fitz.open(stream=file.read(), filetype="pdf")
         markdown_text = ""
-        
         for page_num in range(pdf.page_count):
             page = pdf.load_page(page_num)
             markdown_text += page.get_text("markdown")
             markdown_text += "\n\n"  # Add spacing between pages
-        
         return jsonify({
             "page_count": pdf.page_count,
             "markdown_text": markdown_text
         }), 200
-        
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-import fitz
-from flask import Flask, request, jsonify
 
 @app.route('/api/extract_random_pages', methods=['POST'])
 @auth.login_required
 def extract_random_pages():
     if 'pdf_file' not in request.files:
         return jsonify({"error": "No file part"}), 400
-    
     file = request.files['pdf_file']
     pages_str = request.form.get('pages', '')  # Get as string like "1,3,7"
     pages = [int(p) for p in pages_str.split(',')] if pages_str else []
-    
     try:
         pdf = fitz.open(stream=file.read(), filetype="pdf")
         extracted_text = {}
-        
         for page_num in pages:
             page = pdf.load_page(page_num-1)
             extracted_text[page_num] = page.get_text()
-        
         return jsonify({
             "page_count": pdf.page_count,
             "extracted_text": extracted_text
         }), 200
-        
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-        
+
 @app.route('/api/extract_text', methods=['POST'])
 @auth.login_required
 def extract_text():
@@ -138,38 +126,42 @@ def extract_text():
     file = request.files['pdf_file']
     if file.filename == '':
         return jsonify({"error": "No selected file"}), 400
-    
+
     # Retrieve and validate page_start and page_end
     page_start = request.form.get('page_start', type=int)
     page_end = request.form.get('page_end', type=int)
+
     if page_start is None or page_end is None:
         return jsonify({"error": "Both page_start and page_end must be provided"}), 400
+
     if page_start < 1 or page_end < 1:
         return jsonify({"error": "page_start and page_end must be positive integers"}), 400
+
     if page_start > page_end:
         return jsonify({"error": "page_start cannot be greater than page_end"}), 400
-    
+
     try:
         # Open the PDF with PyMuPDF
         pdf = fitz.open(stream=file.read(), filetype="pdf")
         total_pages = pdf.page_count
-        
+
         # Adjust page_end if it exceeds the total number of pages
         if page_end > total_pages:
             page_end = total_pages
-        
+
         extracted_text = {}
-        
+
         # Extract text from the specified page range
         for page_num in range(page_start, page_end + 1):
             page = pdf.load_page(page_num - 1)  # Zero-based indexing
             text = page.get_text()
             extracted_text[page_num] = text
-        
+
         return jsonify({
             "page_count": total_pages,
             "extracted_text": extracted_text
         }), 200
+
     except Exception as e:
         return jsonify({"error": f"An error occurred: {str(e)}"}), 500
 
@@ -255,27 +247,22 @@ def extract_outline():
         pdf = fitz.open(stream=file.read(), filetype="pdf")
         toc = pdf.get_toc(simple=False)  # Get the outline/toc with detailed entries
         outline = []
-        
         for i, entry in enumerate(toc):
             title = entry[1]
             start_page = entry[2]
             end_page = None
-            
             if i + 1 < len(toc):
                 next_start_page = toc[i + 1][2]  # The start page of the next chapter
                 next_title = toc[i + 1][1]  # The title of the next chapter
-                
                 # Case 1: If the next chapter starts on the same page
                 if next_start_page == start_page:
                     end_page = start_page  # Simply set end page to current page
-                
                 # Case 2: If the next chapter starts on a different page
                 else:
                     # Load the next chapter's start page
                     next_page = pdf.load_page(next_start_page - 1)  # 0-based index
                     next_page_text = next_page.get_text("text").strip()
                     next_page_lines = next_page_text.split('\n')
-                    
                     # Check for text above the next chapter's title
                     text_above_title = False
                     for line in next_page_lines:
@@ -284,31 +271,26 @@ def extract_outline():
                         if line.strip():  # Found text above the title
                             text_above_title = True
                             break
-                    
                     if text_above_title:
                         end_page = next_start_page  # Set to current page if text exists above
                     else:
                         end_page = next_start_page - 1  # Set to previous page if no text above
-            
             else:
                 # For the last chapter; set end to total pages of the document
                 end_page = pdf.page_count
-            
             # Ensure end page is not before start page
             if end_page is not None and end_page < start_page:
                 end_page = start_page
-            
             outline.append({
                 "level": entry[0],
                 "title": title,
                 "start_page": start_page,
                 "end_page": end_page
             })
-        
         return jsonify({"page_count": pdf.page_count, "outline": outline}), 200
-    
     except Exception as e:
-        return jsonify({"error": str(e)}), 500        
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/extract_pages_text', methods=['POST'])
 @auth.login_required
 def extract_pages_text():
@@ -318,31 +300,41 @@ def extract_pages_text():
     file = request.files['pdf_file']
     if file.filename == '':
         return jsonify({"error": "No selected file"}), 400
+
     # Retrieve and validate page_start and page_end
     page_start = request.form.get('page_start', type=int)
     page_end = request.form.get('page_end', type=int)
+
     if page_start is None or page_end is None:
         return jsonify({"error": "Both page_start and page_end must be provided"}), 400
+
     if page_start < 1 or page_end < 1:
         return jsonify({"error": "page_start and page_end must be positive integers"}), 400
+
     if page_start > page_end:
         return jsonify({"error": "page_start cannot be greater than page_end"}), 400
+
     try:
         # Open the PDF with PyMuPDF
         pdf = fitz.open(stream=file.read(), filetype="pdf")
         total_pages = pdf.page_count
+
         # Adjust page_end if it exceeds the total number of pages
         if page_end > total_pages:
             page_end = total_pages
+
         extracted_text = {}
+
         for page_num in range(page_start, page_end + 1):
             page = pdf.load_page(page_num - 1)  # Zero-based indexing
             text = page.get_text()
             extracted_text[page_num] = text
+
         return jsonify({
             "page_count": total_pages,
             "extracted_text": extracted_text
         }), 200
+
     except Exception as e:
         return jsonify({"error": f"An error occurred: {str(e)}"}), 500
 
@@ -351,7 +343,6 @@ def extract_pages_text():
 def extract_pages():
     if 'pdf_file' not in request.files:
         return jsonify({"error": "No file part"}), 400
-    
     file = request.files['pdf_file']
     if file.filename == '':
         return jsonify({"error": "No selected file"}), 400
@@ -372,7 +363,6 @@ def extract_pages():
                 return jsonify({"error": "page_start and page_end must be positive integers"}), 400
             if page_start > page_end:
                 return jsonify({"error": "page_start cannot be greater than page_end"}), 400
-            
             page_end = min(page_end, total_pages)
             pages = range(page_start, page_end + 1)
 
@@ -381,7 +371,6 @@ def extract_pages():
             pages = [int(p) for p in pages_str.split(',')]
             if not all(p > 0 for p in pages):
                 return jsonify({"error": "All page numbers must be positive integers"}), 400
-        
         else:
             return jsonify({"error": "Either page range or specific pages must be provided"}), 400
 
@@ -436,8 +425,12 @@ def extract_table_data():
             last_y = None # Track vertical position
 
             for block in blocks:
-                x0, y0, x1, y1, text, block_no = block
-                #print(f"Block: {text}, y0: {y0}")  #Debugging
+                try:
+                    x0, y0, x1, y1, text, block_no = block[:6]  # Take only the first 6 elements
+                except ValueError as e:
+                    print(f"Error unpacking: {block}.  Error was: {e}") # for debug
+                    continue # Skip the rest of the loop, consider logging instead
+
 
                 if last_y is None or abs(y0 - last_y) < 5: # Adjust tolerance as needed
                     current_row.append(text.strip())
