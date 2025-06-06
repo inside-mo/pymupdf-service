@@ -454,9 +454,9 @@ def extract_table_data():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route('/api/simple_extract_form', methods=['POST'])
+@app.route('/api/universal_form_extract', methods=['POST'])
 @auth.login_required
-def simple_extract_form():
+def universal_form_extract():
     if 'pdf_file' not in request.files:
         return jsonify({"error": "No file part"}), 400
     file = request.files['pdf_file']
@@ -467,117 +467,213 @@ def simple_extract_form():
         pdf_content = file.read()
         pdf = fitz.open(stream=pdf_content, filetype="pdf")
         
-        # Simple extraction: just look at page pixels for checkmarks
-        # Convert to image and analyze specific grid positions where checkmarks should be
+        # Store all extracted tables
+        all_tables = []
         
-        # Predefined grid positions for the DGUV V3 form
-        # Create a mapping of expected positions
-        grid_positions = {
-            "besichtigung": {
-                "rows": [
-                    {"name": "Richtige Auswahl der Betriebsmittel", "y": 480},
-                    {"name": "Schäden an Betriebsmittel", "y": 500},
-                    {"name": "Leitungsverlegung", "y": 520},
-                    # Add more rows based on your form
-                ],
-                "columns": [
-                    {"name": "i.o", "x": 60},
-                    {"name": "n.i.o", "x": 100}, 
-                    {"name": "t.n.z", "x": 140}
-                ]
-            },
-            "erprobung": {
-                "rows": [
-                    {"name": "Funktion der Schutzeinrichtung (RCD)", "y": 480},
-                    {"name": "Rechtsdrehfeld der Drehstromsteckdosen", "y": 500},
-                    {"name": "Funktion der elektrischen Anlage", "y": 520},
-                    # Add more rows
-                ],
-                "columns": [
-                    {"name": "i.o", "x": 420},
-                    {"name": "n.i.o", "x": 460},
-                    {"name": "t.n.z", "x": 500}
-                ]
-            }
-        }
-        
-        form_data = {
-            "inspection_tables": {
-                "besichtigung": {"rows": []},
-                "erprobung": {"rows": []}
-            }
-        }
-        
-        # Process first page only (usually the form is on first page)
-        page = pdf.load_page(0)
-        
-        # Get text with positions to find actual row labels
-        text_blocks = page.get_text("dict")
-        text_with_positions = []
-        
-        for b in text_blocks["blocks"]:
-            if "lines" in b:
-                for l in b["lines"]:
-                    for s in l["spans"]:
-                        text_with_positions.append({
-                            "text": s["text"],
-                            "bbox": s["bbox"]
-                        })
-        
-        # Convert page to image for pixel analysis
-        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
-        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-        
-        # Analyze each inspection area
-        for table_name, table_info in grid_positions.items():
-            for row in table_info["rows"]:
-                row_item = {
-                    "label": row["name"],
-                    "i.o": False,
-                    "n.i.o": False,
-                    "t.n.z": False
-                }
-                
-                # Match the row name to actual text to get exact position
-                matched_row = None
-                for text_item in text_with_positions:
-                    if row["name"] in text_item["text"]:
-                        matched_row = text_item
-                        break
-                
-                if matched_row:
-                    row_y = matched_row["bbox"][1]
+        for page_num in range(pdf.page_count):
+            page = pdf.load_page(page_num)
+            
+            # Convert to image for visual analysis
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            
+            # Get all text with positions
+            text_blocks = page.get_text("dict")
+            
+            # Extract all tables on the page
+            # Step 1: Identify potential table structures
+            # Look for repeating patterns or column headers like "i.o", "n.i.o", "t.n.z"
+            
+            form_data = {"inspection_tables": {}}
+            
+            # Extract all text items with their positions
+            text_items = []
+            for b in text_blocks["blocks"]:
+                if "lines" in b:
+                    for l in b["lines"]:
+                        for s in l["spans"]:
+                            text_items.append({
+                                "text": s["text"].strip(),
+                                "bbox": s["bbox"],
+                                "x": s["bbox"][0],
+                                "y": s["bbox"][1],
+                                "width": s["bbox"][2] - s["bbox"][0],
+                                "height": s["bbox"][3] - s["bbox"][1]
+                            })
+            
+            # Find potential table headers (i.o, n.i.o, t.n.z)
+            header_texts = ["i.o", "n.i.o", "t.n.z"]
+            potential_tables = []
+            
+            # Find all occurrences of header texts
+            header_positions = []
+            for item in text_items:
+                if item["text"] in header_texts:
+                    header_positions.append({
+                        "text": item["text"],
+                        "x": item["x"],
+                        "y": item["y"],
+                        "bbox": item["bbox"]
+                    })
+            
+            # Group headers by vertical position (similar y values = same table)
+            from collections import defaultdict
+            tables_by_y = defaultdict(list)
+            
+            for header in header_positions:
+                # Group headers within 20 pixels vertically
+                y_key = int(header["y"] / 20) * 20
+                tables_by_y[y_key].append(header)
+            
+            # For each group, create a potential table
+            for y_key, headers in tables_by_y.items():
+                # Need at least 2 headers to form a table
+                if len(headers) >= 2:
+                    # Sort headers by x position
+                    sorted_headers = sorted(headers, key=lambda h: h["x"])
                     
-                    # Check each column position for checkmarks
-                    for col in table_info["columns"]:
-                        # Check the pixel at this position - if it's dark, likely a checkmark
-                        pixel_x = int(col["x"] * 2)  # Adjust for scaling
-                        pixel_y = int(row_y * 2)
-                        
-                        # Check a small area around the expected checkbox location
-                        # This is a simple approach - better would be to use image recognition
-                        dark_pixel_count = 0
-                        sample_area = 10  # Check 10x10 pixel area
-                        
-                        for dx in range(-sample_area, sample_area):
-                            for dy in range(-sample_area, sample_area):
-                                try:
-                                    pixel = img.getpixel((pixel_x + dx, pixel_y + dy))
-                                    # Check if pixel is dark (likely part of a checkmark)
-                                    if sum(pixel[:3]) < 200:  # Adjust threshold as needed
-                                        dark_pixel_count += 1
-                                except:
-                                    continue
-                        
-                        # If enough dark pixels found, consider it checked
-                        if dark_pixel_count > 20:  # Adjust threshold as needed
-                            row_item[col["name"]] = True
+                    # Create column definitions
+                    columns = []
+                    for header in sorted_headers:
+                        columns.append({
+                            "name": header["text"],
+                            "x": header["x"],
+                            "width": header["bbox"][2] - header["bbox"][0]
+                        })
+                    
+                    # Define the table's vertical region (start below headers)
+                    table_y_start = y_key + 20  # Start below headers
+                    
+                    # Find the next table or end of page
+                    next_table_y = float('inf')
+                    for next_y in tables_by_y.keys():
+                        if next_y > y_key:
+                            next_table_y = min(next_table_y, next_y)
+                    
+                    # If no next table found, use page height
+                    if next_table_y == float('inf'):
+                        table_y_end = pix.height / 2  # Convert to original coordinates
+                    else:
+                        table_y_end = next_table_y - 10  # End just above the next table
+                    
+                    potential_tables.append({
+                        "columns": columns,
+                        "y_start": table_y_start,
+                        "y_end": table_y_end,
+                        "rows": []
+                    })
+            
+            # For each potential table, find row labels and checkboxes
+            for table_idx, table in enumerate(potential_tables):
+                # Find text items that could be row labels
+                # These would be left of the first column and within the table's vertical region
+                leftmost_x = min(col["x"] for col in table["columns"])
                 
-                form_data["inspection_tables"][table_name]["rows"].append(row_item)
+                # Find items that could be row labels
+                row_labels = []
+                for item in text_items:
+                    # Check if item is in the table's vertical region
+                    if table["y_start"] <= item["y"] <= table["y_end"]:
+                        # Check if item is to the left of the first column
+                        if item["x"] < leftmost_x - 5:  # Allow some margin
+                            row_labels.append(item)
+                
+                # Group row labels by vertical position
+                rows_by_y = defaultdict(list)
+                for label in row_labels:
+                    # Group within 10 pixels vertically
+                    y_key = int(label["y"] / 10) * 10
+                    rows_by_y[y_key].append(label)
+                
+                # Create rows
+                rows = []
+                for y_key, labels in rows_by_y.items():
+                    # Combine labels if multiple found for a row
+                    row_text = " ".join([l["text"] for l in labels])
+                    if row_text.strip():  # Skip empty rows
+                        row = {
+                            "label": row_text,
+                            "y": y_key,
+                            "height": max(l["bbox"][3] for l in labels) - min(l["bbox"][1] for l in labels),
+                            "column_values": {}
+                        }
+                        rows.append(row)
+                
+                # Sort rows by vertical position
+                rows.sort(key=lambda r: r["y"])
+                
+                # Detect checkmarks in the pixel data
+                checkmark_positions = []
+                
+                # Scan the image for potential checkmarks
+                # We'll use a simple pixel density analysis
+                sample_size = 8
+                for row in rows:
+                    row_y = row["y"] * 2  # Adjust for scaling
+                    
+                    for col in table["columns"]:
+                        col_x = col["x"] * 2  # Adjust for scaling
+                        
+                        # Check pixel density in the area where a checkbox would be
+                        dark_pixel_count = 0
+                        for dy in range(sample_size):
+                            for dx in range(sample_size):
+                                try:
+                                    x = int(col_x + dx)
+                                    y = int(row_y + dy)
+                                    pixel = img.getpixel((x, y))
+                                    if sum(pixel[:3]) < 400:  # Threshold for dark pixels
+                                        dark_pixel_count += 1
+                                except Exception as e:
+                                    pass
+                        
+                        # If enough dark pixels, mark as checked
+                        is_checked = dark_pixel_count > (sample_size * sample_size * 0.2)  # 20% threshold
+                        row["column_values"][col["name"]] = is_checked
+                
+                # Convert to the final format you requested
+                final_rows = []
+                for row in rows:
+                    # Create row with ordered fields
+                    final_row = {
+                        "label": row["label"]
+                    }
+                    # Add checkbox states in order
+                    for field in ["i.o", "n.i.o", "t.n.z"]:
+                        final_row[field] = row["column_values"].get(field, False)
+                    
+                    final_rows.append(final_row)
+                
+                # Add to the result
+                table_name = f"table_{table_idx + 1}"
+                form_data["inspection_tables"][table_name] = {
+                    "rows": final_rows
+                }
+            
+            # Look for known table names in the text
+            known_tables = ["besichtigung", "erprobung", "Besichtigung", "Erprobung"]
+            for text_item in text_items:
+                for known_table in known_tables:
+                    if known_table.lower() in text_item["text"].lower():
+                        # Find the closest table based on vertical position
+                        closest_table_idx = None
+                        min_distance = float('inf')
+                        for idx, table in enumerate(potential_tables):
+                            distance = abs(text_item["y"] - table["y_start"])
+                            if distance < min_distance:
+                                min_distance = distance
+                                closest_table_idx = idx
+                        
+                        if closest_table_idx is not None:
+                            # Rename the table
+                            old_name = f"table_{closest_table_idx + 1}"
+                            new_name = known_table.lower()
+                            if old_name in form_data["inspection_tables"]:
+                                form_data["inspection_tables"][new_name] = form_data["inspection_tables"].pop(old_name)
+            
+            all_tables.append(form_data)
         
-        return jsonify({
-            "form_data": form_data
-        }), 200
+        return jsonify(all_tables), 200
         
     except Exception as e:
         import traceback
