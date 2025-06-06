@@ -454,9 +454,9 @@ def extract_table_data():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route('/api/extract_form_data', methods=['POST'])
+@app.route('/api/simple_extract_form', methods=['POST'])
 @auth.login_required
-def extract_form_data():
+def simple_extract_form():
     if 'pdf_file' not in request.files:
         return jsonify({"error": "No file part"}), 400
     file = request.files['pdf_file']
@@ -466,181 +466,117 @@ def extract_form_data():
     try:
         pdf_content = file.read()
         pdf = fitz.open(stream=pdf_content, filetype="pdf")
-        result = {}
         
-        # Process each page
-        for page_num in range(pdf.page_count):
-            page = pdf.load_page(page_num)
-            
-            # Extract form metadata
-            text = page.get_text()
-            
-            # Basic Form Details
-            form_data = {
-                "document_type": "DGUV V3 Prüfprotokoll",
-                "date": None,
-                "client": None,
-                "contractor": None,
-                "inspection_tables": {}
+        # Simple extraction: just look at page pixels for checkmarks
+        # Convert to image and analyze specific grid positions where checkmarks should be
+        
+        # Predefined grid positions for the DGUV V3 form
+        # Create a mapping of expected positions
+        grid_positions = {
+            "besichtigung": {
+                "rows": [
+                    {"name": "Richtige Auswahl der Betriebsmittel", "y": 480},
+                    {"name": "Schäden an Betriebsmittel", "y": 500},
+                    {"name": "Leitungsverlegung", "y": 520},
+                    # Add more rows based on your form
+                ],
+                "columns": [
+                    {"name": "i.o", "x": 60},
+                    {"name": "n.i.o", "x": 100}, 
+                    {"name": "t.n.z", "x": 140}
+                ]
+            },
+            "erprobung": {
+                "rows": [
+                    {"name": "Funktion der Schutzeinrichtung (RCD)", "y": 480},
+                    {"name": "Rechtsdrehfeld der Drehstromsteckdosen", "y": 500},
+                    {"name": "Funktion der elektrischen Anlage", "y": 520},
+                    # Add more rows
+                ],
+                "columns": [
+                    {"name": "i.o", "x": 420},
+                    {"name": "n.i.o", "x": 460},
+                    {"name": "t.n.z", "x": 500}
+                ]
             }
-            
-            # Extract date (simple regex approach)
-            import re
-            date_match = re.search(r'Datum:\s*(\d{2}\.\d{2}\.\d{4})', text)
-            if date_match:
-                form_data["date"] = date_match.group(1)
-            
-            # Extract client/contractor details
-            if "Deutsche Glasfaser" in text:
-                form_data["client"] = "Deutsche Glasfaser Wholesale GmbH"
-            if "Tempton Technik GmbH" in text:
-                form_data["contractor"] = "Tempton Technik GmbH"
-            
-            # Extract checkmark data from the form
-            # Get precise positions of text and symbols
-            blocks_dict = page.get_text("dict")
-            
-            # Define checkmark symbols
-            checkmark_symbols = ["✓", "■", "√"]
-            
-            # Extract inspection tables - we need to identify table rows and columns
-            inspection_tables = {
-                "besichtigung": {
-                    "rows": [],
-                    "columns": ["i.o", "n.i.o", "t.n.z"]
-                },
-                "erprobung": {
-                    "rows": [],
-                    "columns": ["i.o", "n.i.o", "t.n.z"]
+        }
+        
+        form_data = {
+            "inspection_tables": {
+                "besichtigung": {"rows": []},
+                "erprobung": {"rows": []}
+            }
+        }
+        
+        # Process first page only (usually the form is on first page)
+        page = pdf.load_page(0)
+        
+        # Get text with positions to find actual row labels
+        text_blocks = page.get_text("dict")
+        text_with_positions = []
+        
+        for b in text_blocks["blocks"]:
+            if "lines" in b:
+                for l in b["lines"]:
+                    for s in l["spans"]:
+                        text_with_positions.append({
+                            "text": s["text"],
+                            "bbox": s["bbox"]
+                        })
+        
+        # Convert page to image for pixel analysis
+        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        
+        # Analyze each inspection area
+        for table_name, table_info in grid_positions.items():
+            for row in table_info["rows"]:
+                row_item = {
+                    "label": row["name"],
+                    "i.o": False,
+                    "n.i.o": False,
+                    "t.n.z": False
                 }
-            }
-            
-            # First find table labels to establish boundaries
-            table_boundaries = {}
-            for block in blocks_dict["blocks"]:
-                if "lines" in block:
-                    for line in block["lines"]:
-                        line_text = "".join([span["text"] for span in line["spans"]])
-                        # Look for table headers
-                        if "Besichtigung" in line_text:
-                            table_boundaries["besichtigung_y"] = line["bbox"][1]
-                        elif "Erprobung" in line_text:
-                            table_boundaries["erprobung_y"] = line["bbox"][1]
-            
-            # Process all text elements to find checkmarks and row labels
-            current_table = None
-            checkmark_positions = []
-            table_rows = {}
-            
-            # Find all checkmarks first
-            for block in blocks_dict["blocks"]:
-                if "lines" in block:
-                    for line in block["lines"]:
-                        for span in line["spans"]:
-                            text = span["text"]
-                            # Check if this span contains any checkmark symbols
-                            for char in span["chars"]:
-                                if char["c"] in checkmark_symbols:
-                                    checkmark_positions.append({
-                                        "symbol": char["c"],
-                                        "x": char["bbox"][0],
-                                        "y": char["bbox"][1],
-                                        "width": char["bbox"][2] - char["bbox"][0],
-                                        "height": char["bbox"][3] - char["bbox"][1]
-                                    })
-            
-            # Now process all text to find row labels
-            for block in blocks_dict["blocks"]:
-                if "lines" in block:
-                    for line in block["lines"]:
-                        line_text = "".join([span["text"] for span in line["spans"]])
-                        y_pos = line["bbox"][1]
+                
+                # Match the row name to actual text to get exact position
+                matched_row = None
+                for text_item in text_with_positions:
+                    if row["name"] in text_item["text"]:
+                        matched_row = text_item
+                        break
+                
+                if matched_row:
+                    row_y = matched_row["bbox"][1]
+                    
+                    # Check each column position for checkmarks
+                    for col in table_info["columns"]:
+                        # Check the pixel at this position - if it's dark, likely a checkmark
+                        pixel_x = int(col["x"] * 2)  # Adjust for scaling
+                        pixel_y = int(row_y * 2)
                         
-                        # Skip if this is a table header or empty line
-                        if "Besichtigung" in line_text or "Erprobung" in line_text or not line_text.strip():
-                            continue
+                        # Check a small area around the expected checkbox location
+                        # This is a simple approach - better would be to use image recognition
+                        dark_pixel_count = 0
+                        sample_area = 10  # Check 10x10 pixel area
                         
-                        # Determine which table this belongs to
-                        if "besichtigung_y" in table_boundaries and y_pos > table_boundaries["besichtigung_y"]:
-                            if "erprobung_y" in table_boundaries and y_pos > table_boundaries["erprobung_y"]:
-                                current_table = "erprobung"
-                            else:
-                                current_table = "besichtigung"
-                                
-                        if current_table:
-                            # Filter out header texts like "i.o", "n.i.o", "t.n.z"
-                            if line_text.strip() not in ["i.o", "n.i.o", "t.n.z", "Bemerkung:"]:
-                                # This is likely a row label
-                                if line_text.strip():
-                                    # Store the row with its y-position for later matching with checkmarks
-                                    if current_table not in table_rows:
-                                        table_rows[current_table] = []
-                                    
-                                    # Skip rows that are headers or don't contain inspection items
-                                    skip_texts = ["Besichtigung", "Erprobung", "i.o", "n.i.o", "t.n.z", 
-                                                 "Bemerkung", "siehe Checkliste"]
-                                    
-                                    if not any(skip_text in line_text for skip_text in skip_texts):
-                                        table_rows[current_table].append({
-                                            "text": line_text.strip(),
-                                            "y_min": line["bbox"][1],
-                                            "y_max": line["bbox"][3],
-                                            "x_min": line["bbox"][0],
-                                            "x_max": line["bbox"][2]
-                                        })
-            
-            # Now build the structured data by matching checkmarks to rows
-            # Define column boundaries (x-coordinates) for i.o, n.i.o, t.n.z
-            # These will need to be adjusted based on your specific form layout
-            column_boundaries = {
-                "besichtigung": {
-                    "i.o": {"min": 40, "max": 80},
-                    "n.i.o": {"min": 80, "max": 120},
-                    "t.n.z": {"min": 120, "max": 160}
-                },
-                "erprobung": {
-                    "i.o": {"min": 450, "max": 490},
-                    "n.i.o": {"min": 490, "max": 530},
-                    "t.n.z": {"min": 530, "max": 570}
-                }
-            }
-            
-            # Create structured tables
-            for table_name in ["besichtigung", "erprobung"]:
-                if table_name in table_rows:
-                    for row_data in table_rows[table_name]:
-                        row_item = {
-                            "label": row_data["text"],
-                            "i.o": False,
-                            "n.i.o": False,
-                            "t.n.z": False
-                        }
+                        for dx in range(-sample_area, sample_area):
+                            for dy in range(-sample_area, sample_area):
+                                try:
+                                    pixel = img.getpixel((pixel_x + dx, pixel_y + dy))
+                                    # Check if pixel is dark (likely part of a checkmark)
+                                    if sum(pixel[:3]) < 200:  # Adjust threshold as needed
+                                        dark_pixel_count += 1
+                                except:
+                                    continue
                         
-                        # Check if any checkmarks correspond to this row
-                        for checkmark in checkmark_positions:
-                            # Check if the checkmark's y-coordinate is within this row's range
-                            if row_data["y_min"] <= checkmark["y"] <= row_data["y_max"]:
-                                # Determine which column this checkmark belongs to
-                                for column in ["i.o", "n.i.o", "t.n.z"]:
-                                    if (column_boundaries[table_name][column]["min"] <= 
-                                        checkmark["x"] <= 
-                                        column_boundaries[table_name][column]["max"]):
-                                        row_item[column] = True
-                        
-                        inspection_tables[table_name]["rows"].append(row_item)
-            
-            form_data["inspection_tables"] = inspection_tables
-            
-            # Extract circuit table data
-            circuit_table = []
-            # Logic to extract circuit table rows would go here
-            # This is more complex and would need careful coordinates mapping
-            
-            result[page_num + 1] = form_data
+                        # If enough dark pixels found, consider it checked
+                        if dark_pixel_count > 20:  # Adjust threshold as needed
+                            row_item[col["name"]] = True
+                
+                form_data["inspection_tables"][table_name]["rows"].append(row_item)
         
         return jsonify({
-            "page_count": pdf.page_count,
-            "form_data": result
+            "form_data": form_data
         }), 200
         
     except Exception as e:
@@ -649,6 +585,6 @@ def extract_form_data():
             "error": str(e),
             "traceback": traceback.format_exc()
         }), 500
-
+        
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
