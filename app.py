@@ -15,7 +15,6 @@ auth = HTTPBasicAuth()
 API_USERNAME = os.environ.get("API_USERNAME")
 API_PASSWORD = os.environ.get("API_PASSWORD")
 
-# Ensure that both API_USERNAME and API_PASSWORD are set
 if not API_USERNAME or not API_PASSWORD:
     raise ValueError("API_USERNAME and API_PASSWORD environment variables must be set.")
 
@@ -27,18 +26,12 @@ users = {
 def verify_password(username, password):
     return username in users and check_password_hash(users.get(username), password)
 
-# ... (all your existing routes here) ...
+# ... your existing endpoints ...
 
 # --- PDF to Image Endpoints ---
-
 @app.route('/api/pdf_to_image', methods=['POST'])
 @auth.login_required
 def pdf_to_image():
-    """
-    Converts a specific page of a PDF to a high-DPI PNG image (default: 300 DPI).
-    POST with 'pdf_file', optional 'page_number' (1-based), and optional 'dpi'.
-    Returns: PNG image.
-    """
     if 'pdf_file' not in request.files:
         return jsonify({"error": "No file part"}), 400
     file = request.files['pdf_file']
@@ -46,7 +39,6 @@ def pdf_to_image():
         return jsonify({"error": "No selected file"}), 400
 
     try:
-        # Params
         page_number = request.form.get('page_number', default=1, type=int)
         dpi = request.form.get('dpi', default=300, type=int)
         if dpi < 72 or dpi > 1200:
@@ -57,11 +49,10 @@ def pdf_to_image():
             return jsonify({"error": f"Page_number out of bounds (1-{pdf.page_count})"}), 400
 
         page = pdf.load_page(page_number - 1)
-        scale = dpi / 72  # 72 is the default PDF DPI
+        scale = dpi / 72
         mat = fitz.Matrix(scale, scale)
         pix = page.get_pixmap(matrix=mat, alpha=False)
 
-        # Save as PNG to buffer
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
         buf = io.BytesIO()
         img.save(buf, format="PNG")
@@ -73,20 +64,13 @@ def pdf_to_image():
             as_attachment=True,
             download_name=f"page_{page_number}_{dpi}dpi.png"
         )
-
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
-
 @app.route('/api/pdf_to_images', methods=['POST'])
 @auth.login_required
 def pdf_to_images():
-    """
-    Converts all pages of a PDF to high-DPI PNG images and returns them as a zip.
-    POST with 'pdf_file' and optional 'dpi'.
-    Returns: ZIP of PNGs.
-    """
     if 'pdf_file' not in request.files:
         return jsonify({"error": "No file part"}), 400
     file = request.files['pdf_file']
@@ -118,12 +102,47 @@ def pdf_to_images():
             as_attachment=True,
             download_name="pdf_images.zip"
         )
-
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
-# --- End PDF to Image Endpoints ---
+# --- Split PDF into Single Page PDFs ---
+
+@app.route('/api/split_pdf', methods=['POST'])
+@auth.login_required
+def split_pdf():
+    """
+    Split the uploaded PDF into single-page PDFs, return as a ZIP.
+    POST with 'pdf_file'.
+    """
+    if 'pdf_file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    file = request.files['pdf_file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+
+    try:
+        pdf = fitz.open(stream=file.read(), filetype="pdf")
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for i in range(pdf.page_count):
+                single_pdf = fitz.open()
+                single_pdf.insert_pdf(pdf, from_page=i, to_page=i)
+                pdf_bytes = io.BytesIO()
+                single_pdf.save(pdf_bytes)
+                single_pdf.close()
+                pdf_bytes.seek(0)
+                zipf.writestr(f"page_{i+1}.pdf", pdf_bytes.read())
+        zip_buf.seek(0)
+        return send_file(
+            zip_buf,
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name="split_pages.zip"
+        )
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
