@@ -26,7 +26,6 @@ users = {
 def verify_password(username, password):
     return username in users and check_password_hash(users.get(username), password)
 
-# --- PDF to Image Endpoints ---
 @app.route('/api/pdf_to_image', methods=['POST'])
 @auth.login_required
 def pdf_to_image():
@@ -104,53 +103,51 @@ def pdf_to_images():
         import traceback
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
-# --- Split PDF into Single Page PDFs with robust n8n form/binary support ---
-
 @app.route('/api/split_pdf', methods=['POST'])
 @auth.login_required
 def split_pdf():
     """
     Split the uploaded PDF into single-page PDFs, return as a ZIP.
-    Accepts both: (a) pdf_file as a true file upload (request.files),
-    or (b) pdf_file as a raw form field (request.form) for n8n compatibility.
+    Compatible with:
+     - multipart file upload (request.files['pdf_file'])
+     - pdf_file as form field (request.form['pdf_file'])
+     - raw binary body (request.data, as n8n 'n8n Binary File')
     """
-
-    # --- Begin Logging Block ---
     import sys
     print("\n--- /api/split_pdf REQUEST RECEIVED ---", file=sys.stderr)
     print("Request headers:", dict(request.headers), file=sys.stderr)
     print("Request.files keys:", list(request.files.keys()), file=sys.stderr)
     print("Request.form keys:", list(request.form.keys()), file=sys.stderr)
-    print("Request.files object:", request.files, file=sys.stderr)
-    print("Request.form object:", request.form, file=sys.stderr)
-    for k, v in request.files.items():
-        print(f"File key: {k}, filename: {v.filename}, content_type: {v.content_type}", file=sys.stderr)
+    print("Request.data length:", len(request.data), file=sys.stderr)
     print("--- END LOG ---\n", file=sys.stderr)
-    # --- End Logging Block ---
 
-    file = request.files.get('pdf_file')
     pdf_bytes = None
 
+    # 1. Try as file upload
+    file = request.files.get('pdf_file')
     if file:
         pdf_bytes = file.read()
-    else:
-        pdf_data = request.form.get('pdf_file')
-        if pdf_data is None:
-            return jsonify({
-                "error": "No file part",
-                "available_request_files_keys": list(request.files.keys()),
-                "available_request_form_keys": list(request.form.keys())
-            }), 400
-        # Heuristic: try to decode as base64 first, if fails, treat as raw bytes
+    # 2. Try as form field
+    elif 'pdf_file' in request.form:
+        pdf_data = request.form['pdf_file']
         try:
             import base64
             pdf_bytes = base64.b64decode(pdf_data, validate=True)
         except Exception:
-            # n8n might have sent raw PDF bytes as text (not ideal, but possible)
             try:
                 pdf_bytes = pdf_data.encode('latin1')
             except Exception:
                 return jsonify({"error": "Unable to decode uploaded PDF"}), 400
+    # 3. Try as raw binary body (n8n Binary File)
+    elif request.data and len(request.data) > 0:
+        pdf_bytes = request.data
+    else:
+        return jsonify({
+            "error": "No file part",
+            "available_request_files_keys": list(request.files.keys()),
+            "available_request_form_keys": list(request.form.keys()),
+            "request_data_length": len(request.data)
+        }), 400
 
     try:
         pdf = fitz.open(stream=pdf_bytes, filetype="pdf")
