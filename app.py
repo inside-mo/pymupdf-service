@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template_string, send_file
+from flask import Flask, request, jsonify, send_file
 import fitz  # PyMuPDF
 import io
 from PIL import Image
@@ -107,11 +107,15 @@ def pdf_to_images():
 @auth.login_required
 def split_pdf():
     """
-    Split the uploaded PDF into single-page PDFs, return as a ZIP.
+    Split the uploaded PDF into single-page PDFs, return as a ZIP (default)
+    or as a single page PDF if mode=single (with optional page=...).
     Compatible with:
      - multipart file upload (request.files['pdf_file'])
      - pdf_file as form field (request.form['pdf_file'])
      - raw binary body (request.data, as n8n 'n8n Binary File')
+    Query params or form fields:
+      mode=zip (default) or mode=single
+      page=number (1-based, required for mode=single)
     """
     import sys
     print("\n--- /api/split_pdf REQUEST RECEIVED ---", file=sys.stderr)
@@ -119,6 +123,12 @@ def split_pdf():
     print("Request.files keys:", list(request.files.keys()), file=sys.stderr)
     print("Request.form keys:", list(request.form.keys()), file=sys.stderr)
     print("Request.data length:", len(request.data), file=sys.stderr)
+    
+    # Get parameters robustly
+    mode = request.args.get('mode') or request.form.get('mode') or 'zip'
+    page_str = request.args.get('page') or request.form.get('page')
+    print(f"Mode received: {mode}", file=sys.stderr)
+    print(f"Page received: {page_str}", file=sys.stderr)
     print("--- END LOG ---\n", file=sys.stderr)
 
     pdf_bytes = None
@@ -151,26 +161,51 @@ def split_pdf():
 
     try:
         pdf = fitz.open(stream=pdf_bytes, filetype="pdf")
-        zip_buf = io.BytesIO()
-        with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for i in range(pdf.page_count):
-                single_pdf = fitz.open()
-                single_pdf.insert_pdf(pdf, from_page=i, to_page=i)
-                pdf_bytes_io = io.BytesIO()
-                single_pdf.save(pdf_bytes_io)
-                single_pdf.close()
-                pdf_bytes_io.seek(0)
-                zipf.writestr(f"page_{i+1}.pdf", pdf_bytes_io.read())
-        zip_buf.seek(0)
-        return send_file(
-            zip_buf,
-            mimetype="application/zip",
-            as_attachment=True,
-            download_name="split_pages.zip"
-        )
     except Exception as e:
         import traceback
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+        return jsonify({"error": "Could not open PDF", "traceback": traceback.format_exc()}), 400
+
+    if mode == "single":
+        try:
+            page_num = int(page_str) if page_str else 1
+        except Exception:
+            return jsonify({"error": "Invalid page number"}), 400
+        if not (1 <= page_num <= pdf.page_count):
+            return jsonify({"error": f"Page out of bounds. PDF has {pdf.page_count} pages."}), 400
+        single_pdf = fitz.open()
+        single_pdf.insert_pdf(pdf, from_page=page_num-1, to_page=page_num-1)
+        pdf_bytes_io = io.BytesIO()
+        single_pdf.save(pdf_bytes_io)
+        single_pdf.close()
+        pdf_bytes_io.seek(0)
+        return send_file(
+            pdf_bytes_io,
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name=f"page_{page_num}.pdf"
+        )
+    else:
+        try:
+            zip_buf = io.BytesIO()
+            with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for i in range(pdf.page_count):
+                    single_pdf = fitz.open()
+                    single_pdf.insert_pdf(pdf, from_page=i, to_page=i)
+                    pdf_bytes_io = io.BytesIO()
+                    single_pdf.save(pdf_bytes_io)
+                    single_pdf.close()
+                    pdf_bytes_io.seek(0)
+                    zipf.writestr(f"page_{i+1}.pdf", pdf_bytes_io.read())
+            zip_buf.seek(0)
+            return send_file(
+                zip_buf,
+                mimetype="application/zip",
+                as_attachment=True,
+                download_name="split_pages.zip"
+            )
+        except Exception as e:
+            import traceback
+            return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
