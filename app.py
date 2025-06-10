@@ -9,6 +9,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import os
 import zipfile
 import hashlib
+import traceback  # Add this import for error reporting
+import re  # Add this import for regular expressions
 
 app = Flask(__name__)
 auth = HTTPBasicAuth()
