@@ -8,6 +8,7 @@ from flask_httpauth import HTTPBasicAuth
 from werkzeug.security import generate_password_hash, check_password_hash
 import os
 import zipfile
+import hashlib
 
 app = Flask(__name__)
 auth = HTTPBasicAuth()
@@ -72,6 +73,119 @@ def upload_file():
             return f"An error occurred while processing the PDF: {str(e)}", 500
     return render_template_string(HTML_TEMPLATE)
 
+@app.route('/api/extract-text', methods=['POST'])
+@auth.login_required
+def extract_text():
+    """Extract text from PDF and return structured JSON"""
+    if 'pdf_file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    
+    file = request.files['pdf_file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    
+    try:
+        # Read file content
+        pdf_data = file.read()
+        doc = fitz.open(stream=pdf_data, filetype="pdf")
+        
+        # Initialize result dictionary
+        result = {}
+        
+        # Process each page
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            
+            # Extract text blocks with hierarchical information
+            blocks = page.get_text("dict")["blocks"]
+            
+            # Process blocks
+            for block in blocks:
+                # Check if this is a text block
+                if "lines" in block:
+                    for line in block["lines"]:
+                        for span in line["spans"]:
+                            text = span["text"].strip()
+                            if text:
+                                # Create a unique ID for this text
+                                text_id = hashlib.md5(text.encode()).hexdigest()
+                                
+                                # Determine text type based on formatting or context
+                                font_size = span["size"]
+                                font_name = span["font"]
+                                is_bold = "bold" in font_name.lower() or span["flags"] & 2 > 0
+                                
+                                # Simple heuristics for text type classification
+                                if is_bold or font_size > 10:
+                                    text_type = "Title"
+                                elif block.get("type", 0) == 1:  # Image block with text
+                                    text_type = "Image"
+                                elif len(text.split()) > 20:
+                                    text_type = "NarrativeText"
+                                else:
+                                    text_type = "UncategorizedText"
+                                
+                                # Identify parent text (e.g., header for a field)
+                                parent_id = None
+                                if text_type == "UncategorizedText" and len(result) > 0:
+                                    # This is a very simplified way to identify parent-child relationships
+                                    # For more accurate results, you'd need to analyze spatial relationships
+                                    for prev_id, prev_item in result.items():
+                                        if prev_item["type"] == "Title" and prev_item["metadata"]["page_number"] == page_num + 1:
+                                            parent_id = prev_id
+                                            break
+                                
+                                # Create metadata
+                                metadata = {
+                                    "filetype": "application/pdf",
+                                    "languages": ["eng"],  # Assuming English, add language detection if needed
+                                    "page_number": page_num + 1,
+                                    "filename": file.filename
+                                }
+                                
+                                if parent_id:
+                                    metadata["parent_id"] = parent_id
+                                
+                                # Add to result
+                                result[text_id] = {
+                                    "type": text_type,
+                                    "text": text,
+                                    "metadata": metadata
+                                }
+                
+                # Check if this is a table block
+                elif block.get("type", 0) == 1 and "image" in block:
+                    # Handle table as image (simplified approach)
+                    table_id = hashlib.md5(f"table_{page_num}_{block['bbox']}".encode()).hexdigest()
+                    
+                    # Extract table text if available
+                    table_text = ""
+                    table_rect = fitz.Rect(block["bbox"])
+                    table_text = page.get_text("text", clip=table_rect)
+                    
+                    # Create HTML representation (simplified)
+                    html_text = f"<table><tbody><tr><td>{table_text}</td></tr></tbody></table>"
+                    
+                    result[table_id] = {
+                        "type": "Table",
+                        "text": table_text.strip(),
+                        "metadata": {
+                            "text_as_html": html_text,
+                            "filetype": "application/pdf",
+                            "languages": ["eng"],
+                            "page_number": page_num + 1,
+                            "filename": file.filename
+                        }
+                    }
+        
+        # Wrap in array as per example
+        final_result = [result]
+        
+        return jsonify(final_result)
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/redact', methods=['POST'])
 @auth.login_required
 def redact():
@@ -81,7 +195,6 @@ def redact():
     file = request.files['pdf_file']
     if file.filename == '':
         return jsonify({"error": "No selected file"}), 400
-
     # 2) Parse locations (support raw JSON array or form-data)
     locations = None
     if request.is_json:
@@ -103,7 +216,6 @@ def redact():
                 return jsonify({"error": "Invalid locations JSON", "details": str(e)}), 400
     if not locations:
         return jsonify({"error": "No locations provided"}), 400
-
     # 3) Apply redactions
     try:
         pdf = fitz.open(stream=file.read(), filetype="pdf")
@@ -130,8 +242,6 @@ def redact():
         return send_file(out, mimetype="application/pdf", as_attachment=True, download_name="redacted.pdf")
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-# … other endpoints unchanged …
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
