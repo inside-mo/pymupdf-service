@@ -112,22 +112,17 @@ def redact():
             if page_idx < 0 or page_idx >= pdf.page_count:
                 continue
             page = pdf.load_page(page_idx)
-            # pdfplumber uses origin top-left (0,0 at top-left), y increasing downward
-            # PyMuPDF (PDF) uses origin bottom-left (0,0 at bottom-left), y increasing upward
-            x0 = float(loc.get('x0', 0)); x1 = float(loc.get('x1', 0))
-            y0 = float(loc.get('y0', 0)); y1 = float(loc.get('y1', 0))
-            H = float(loc.get('page_height', page.rect.height))
-            # Convert from pdfplumber to PDF/PyMuPDF coords:
-            #   PDF y0 = H - y1 (top of box)
-            #   PDF y1 = H - y0 (bottom of box)
-            top = H - y1  # PDF y0
-            bottom = H - y0  # PDF y1
-            rect = fitz.Rect(x0, top, x1, bottom)
+            # Use pdfplumber coords directly (top-left origin, y increasing downward)
+            x0 = float(loc.get('x0', 0))
+            y0 = float(loc.get('y0', 0))
+            x1 = float(loc.get('x1', 0))
+            y1 = float(loc.get('y1', 0))
+            rect = fitz.Rect(x0, y0, x1, y1)
             page.add_redact_annot(rect, fill=(1, 1, 1))
-        # commit all redactions
+        # Commit all redactions
         for p in pdf:
             p.apply_redactions()
-        # 4) return stripped PDF
+        # 4) Return stripped PDF
         out = io.BytesIO()
         pdf.save(out, deflate=True)
         pdf.close()
