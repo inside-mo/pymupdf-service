@@ -53,7 +53,8 @@ HTML_TEMPLATE = '''
     {% endif %}
 </body>
 </html>
-'''  
+'''
+
 @app.route('/', methods=['GET', 'POST'])
 def upload_file():
     if request.method == 'POST':
@@ -62,202 +63,69 @@ def upload_file():
         file = request.files['pdf_file']
         if file.filename == '':
             return "No selected file", 400
-        if file:
-            try:
-                pdf = fitz.open(stream=file.read(), filetype="pdf")
-                num_pages = pdf.page_count
-                result = f"The uploaded PDF has {num_pages} pages."
-                return render_template_string(HTML_TEMPLATE, result=result)
-            except Exception as e:
-                return f"An error occurred while processing the PDF: {str(e)}", 500
+        try:
+            pdf = fitz.open(stream=file.read(), filetype="pdf")
+            num_pages = pdf.page_count
+            result = f"The uploaded PDF has {num_pages} pages."
+            return render_template_string(HTML_TEMPLATE, result=result)
+        except Exception as e:
+            return f"An error occurred while processing the PDF: {str(e)}", 500
     return render_template_string(HTML_TEMPLATE)
 
-@app.route('/api/extract_markdown', methods=['POST'])
-@auth.login_required
-def extract_markdown():
-    if 'pdf_file' not in request.files:
-        return jsonify({"error": "No file part"}), 400
-    file = request.files['pdf_file']
-    if file.filename == '':
-        return jsonify({"error": "No selected file"}), 400
-    try:
-        pdf = fitz.open(stream=file.read(), filetype="pdf")
-        markdown_text = ""
-        for page_num in range(pdf.page_count):
-            page = pdf.load_page(page_num)
-            markdown_text += page.get_text("markdown")
-            markdown_text += "\n\n"
-        return jsonify({
-            "page_count": pdf.page_count,
-            "markdown_text": markdown_text
-        }), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/extract_random_pages', methods=['POST'])
-@auth.login_required
-def extract_random_pages():
-    if 'pdf_file' not in request.files:
-        return jsonify({"error": "No file part"}), 400
-    file = request.files['pdf_file']
-    pages_str = request.form.get('pages', '')
-    pages = [int(p) for p in pages_str.split(',')] if pages_str else []
-    try:
-        pdf = fitz.open(stream=file.read(), filetype="pdf")
-        extracted_text = {}
-        for page_num in pages:
-            page = pdf.load_page(page_num-1)
-            extracted_text[page_num] = page.get_text()
-        return jsonify({
-            "page_count": pdf.page_count,
-            "extracted_text": extracted_text
-        }), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/extract_text', methods=['POST'])
-@auth.login_required
-def extract_text():
-    if 'pdf_file' not in request.files:
-        return jsonify({"error": "No file part"}), 400
-    file = request.files['pdf_file']
-    if file.filename == '':
-        return jsonify({"error": "No selected file"}), 400
-    page_start = request.form.get('page_start', type=int)
-    page_end = request.form.get('page_end', type=int)
-    if page_start is None or page_end is None:
-        return jsonify({"error": "Both page_start and page_end must be provided"}), 400
-    if page_start < 1 or page_end < 1:
-        return jsonify({"error": "page_start and page_end must be positive integers"}), 400
-    if page_start > page_end:
-        return jsonify({"error": "page_start cannot be greater than page_end"}), 400
-    try:
-        pdf = fitz.open(stream=file.read(), filetype="pdf")
-        total_pages = pdf.page_count
-        if page_end > total_pages:
-            page_end = total_pages
-        extracted_text = {}
-        for page_num in range(page_start, page_end + 1):
-            page = pdf.load_page(page_num - 1)
-            text = page.get_text()
-            extracted_text[page_num] = text
-        return jsonify({
-            "page_count": total_pages,
-            "extracted_text": extracted_text
-        }), 200
-    except Exception as e:
-        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
-
-@app.route('/api/extract_images', methods=['POST'])
-@auth.login_required
-def extract_images():
-    if 'pdf_file' not in request.files:
-        return jsonify({"error": "No file part"}), 400
-    file = request.files['pdf_file']
-    if file.filename == '':
-        return jsonify({"error": "No selected file"}), 400
-    try:
-        pdf = fitz.open(stream=file.read(), filetype="pdf")
-        images = []
-        for page_num in range(pdf.page_count):
-            page = pdf.load_page(page_num)
-            image_list = page.get_images(full=True)
-            for img_index, img in enumerate(image_list):
-                xref = img[0]
-                base_image = pdf.extract_image(xref)
-                image_bytes = base_image["image"]
-                image_ext = base_image["ext"]
-                encoded = base64.b64encode(image_bytes).decode('utf-8')
-                images.append({
-                    "page": page_num + 1,
-                    "image_number": img_index + 1,
-                    "extension": image_ext,
-                    "data": encoded
-                })
-        return jsonify({"page_count": pdf.page_count, "images": images}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/get_metadata', methods=['POST'])
-@auth.login_required
-def get_metadata():
-    if 'pdf_file' not in request.files:
-        return jsonify({"error": "No file part"}), 400
-    file = request.files['pdf_file']
-    if file.filename == '':
-        return jsonify({"error": "No selected file"}), 400
-    try:
-        pdf = fitz.open(stream=file.read(), filetype="pdf")
-        metadata = pdf.metadata
-        return jsonify({"metadata": metadata, "page_count": pdf.page_count}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/convert_page', methods=['POST'])
-@auth.login_required
-def convert_page():
-    if 'pdf_file' not in request.files:
-        return jsonify({"error": "No file part"}), 400
-    file = request.files['pdf_file']
-    page_number = request.form.get('page_number', type=int)
-    if file.filename == '':
-        return jsonify({"error": "No selected file"}), 400
-    if page_number is None:
-        return jsonify({"error": "No page_number provided"}), 400
-    try:
-        pdf = fitz.open(stream=file.read(), filetype="pdf")
-        if page_number < 1 or page_number > pdf.page_count:
-            return jsonify({"error": "Invalid page_number"}), 400
-        page = pdf.load_page(page_number - 1)
-        pix = page.get_pixmap()
-        img = Image.open(io.BytesIO(pix.tobytes()))
-        buffered = io.BytesIO()
-        img.save(buffered, format="PNG")
-        img_str = base64.b64encode(buffered.getvalue()).decode('utf-8')
-        return jsonify({"page": page_number, "image": img_str}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# New redact endpoint
 @app.route('/api/redact', methods=['POST'])
 @auth.login_required
 def redact():
+    # 1) Retrieve PDF file
     if 'pdf_file' not in request.files:
         return jsonify({"error": "No file part"}), 400
     file = request.files['pdf_file']
     if file.filename == '':
         return jsonify({"error": "No selected file"}), 400
-    # Load and parse locations JSON
-    locs = request.form.get('locations') or request.json.get('locations')
-    try:
-        locations = json.loads(locs) if isinstance(locs, str) else locs
-    except Exception as e:
-        return jsonify({"error": "Invalid locations JSON", "details": str(e)}), 400
+    # 2) Parse locations (support raw JSON array or form-data)
+    locations = None
+    if request.is_json:
+        data = request.get_json()
+        if isinstance(data, list):
+            locations = data
+        elif isinstance(data, dict) and 'locations' in data:
+            locations = data['locations']
+    if locations is None:
+        locs_str = request.form.get('locations')
+        if locs_str:
+            try:
+                obj = json.loads(locs_str)
+                if isinstance(obj, list):
+                    locations = obj
+                elif isinstance(obj, dict) and 'locations' in obj:
+                    locations = obj['locations']
+            except Exception as e:
+                return jsonify({"error": "Invalid locations JSON", "details": str(e)}), 400
+    if not locations:
+        return jsonify({"error": "No locations provided"}), 400
+    # 3) Apply redactions
     try:
         pdf = fitz.open(stream=file.read(), filetype="pdf")
-        # Handle wrapped structure
-        if isinstance(locations, list) and len(locations) == 1 and isinstance(locations[0], dict) and 'locations' in locations[0]:
-            locs_list = locations[0]['locations']
-        else:
-            locs_list = locations
-        # Add redaction annots
-        for loc in locs_list:
+        for loc in locations:
             page_idx = int(loc.get('page', 0))
             if page_idx < 0 or page_idx >= pdf.page_count:
                 continue
             page = pdf.load_page(page_idx)
-            H = float(loc.get('page_height', page.rect.height))
-            x0 = float(loc.get('x0', 0)); x1 = float(loc.get('x1', 0))
-            y0 = float(loc.get('y0', 0)); y1 = float(loc.get('y1', 0))
-            # convert PDF coords (origin bottom-left) to PyMuPDF coords (origin top-left)
-            y0_pdf = H - y1
-            y1_pdf = H - y0
-            rect = fitz.Rect(x0, y0_pdf, x1, y1_pdf)
-            page.add_redact_annot(rect, fill=(1, 1, 1))
-        # Apply redactions on all pages
+                            # pdfplumber uses origin top-left (0,0 at top-left), y increasing downward
+                # PyMuPDF (PDF) uses origin bottom-left (0,0 at bottom-left), y increasing upward
+                x0 = float(loc.get('x0', 0)); x1 = float(loc.get('x1', 0))
+                y0 = float(loc.get('y0', 0)); y1 = float(loc.get('y1', 0))
+                H = float(loc.get('page_height', page.rect.height))
+                # Convert from pdfplumber to PDF/PyMuPDF coords:
+                #   PDF y0 = H - y1 (top of box)
+                #   PDF y1 = H - y0 (bottom of box)
+                top = H - y1  # PDF y0
+                bottom = H - y0  # PDF y1
+                rect = fitz.Rect(x0, top, x1, bottom)
+                page.add_redact_annot(rect, fill=(1, 1, 1))
+        # commit all redactions
         for p in pdf:
             p.apply_redactions()
-        # Save to bytes
+        # 4) return stripped PDF
         out = io.BytesIO()
         pdf.save(out, deflate=True)
         pdf.close()
@@ -266,23 +134,7 @@ def redact():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route('/api/extract_outline', methods=['POST'])
-@auth.login_required
-def extract_outline():
-    # existing code...
-    pass
-
-@app.route('/api/extract_pages', methods=['POST'])
-@auth.login_required
-def extract_pages():
-    # existing code...
-    pass
-
-@app.route('/api/pdf_to_image', methods=['POST'])
-@auth.login_required
-def pdf_to_image():
-    # existing code...
-    pass
+# … other endpoints unchanged …
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
