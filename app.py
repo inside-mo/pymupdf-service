@@ -81,6 +81,7 @@ def redact():
     file = request.files['pdf_file']
     if file.filename == '':
         return jsonify({"error": "No selected file"}), 400
+
     # 2) Parse locations (support raw JSON array or form-data)
     locations = None
     if request.is_json:
@@ -102,6 +103,7 @@ def redact():
                 return jsonify({"error": "Invalid locations JSON", "details": str(e)}), 400
     if not locations:
         return jsonify({"error": "No locations provided"}), 400
+
     # 3) Apply redactions
     try:
         pdf = fitz.open(stream=file.read(), filetype="pdf")
@@ -110,18 +112,18 @@ def redact():
             if page_idx < 0 or page_idx >= pdf.page_count:
                 continue
             page = pdf.load_page(page_idx)
-                            # pdfplumber uses origin top-left (0,0 at top-left), y increasing downward
-                # PyMuPDF (PDF) uses origin bottom-left (0,0 at bottom-left), y increasing upward
-                x0 = float(loc.get('x0', 0)); x1 = float(loc.get('x1', 0))
-                y0 = float(loc.get('y0', 0)); y1 = float(loc.get('y1', 0))
-                H = float(loc.get('page_height', page.rect.height))
-                # Convert from pdfplumber to PDF/PyMuPDF coords:
-                #   PDF y0 = H - y1 (top of box)
-                #   PDF y1 = H - y0 (bottom of box)
-                top = H - y1  # PDF y0
-                bottom = H - y0  # PDF y1
-                rect = fitz.Rect(x0, top, x1, bottom)
-                page.add_redact_annot(rect, fill=(1, 1, 1))
+            # pdfplumber uses origin top-left (0,0 at top-left), y increasing downward
+            # PyMuPDF (PDF) uses origin bottom-left (0,0 at bottom-left), y increasing upward
+            x0 = float(loc.get('x0', 0)); x1 = float(loc.get('x1', 0))
+            y0 = float(loc.get('y0', 0)); y1 = float(loc.get('y1', 0))
+            H = float(loc.get('page_height', page.rect.height))
+            # Convert from pdfplumber to PDF/PyMuPDF coords:
+            #   PDF y0 = H - y1 (top of box)
+            #   PDF y1 = H - y0 (bottom of box)
+            top = H - y1  # PDF y0
+            bottom = H - y0  # PDF y1
+            rect = fitz.Rect(x0, top, x1, bottom)
+            page.add_redact_annot(rect, fill=(1, 1, 1))
         # commit all redactions
         for p in pdf:
             p.apply_redactions()
