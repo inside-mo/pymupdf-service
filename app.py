@@ -76,7 +76,7 @@ def upload_file():
 @app.route('/api/extract-text', methods=['POST'])
 @auth.login_required
 def extract_text():
-    """Extract text from PDF with improved field recognition"""
+    """Extract structured text from PDF without hardcoded values"""
     if 'pdf_file' not in request.files:
         return jsonify({"error": "No file part"}), 400
     
@@ -96,11 +96,9 @@ def extract_text():
         for page_num in range(len(doc)):
             page = doc[page_num]
             
-            # Extract text as plain text first to help with debugging
+            # Extract text as plain text for debugging
             plain_text = page.get_text("text")
-            
-            # Add the raw text extraction as a debug field
-            debug_id = f"debug_page_{page_num}"
+            debug_id = hashlib.md5(f"debug_page_{page_num}".encode()).hexdigest()
             result[debug_id] = {
                 "type": "Debug",
                 "text": plain_text,
@@ -111,142 +109,178 @@ def extract_text():
                 }
             }
             
-            # Extract text with more detailed information
+            # Get text with structure information
             text_dict = page.get_text("dict")
             
-            # Process blocks with more detail for field extraction
+            # Track labels to identify field types
+            labels = {}  # Store label text -> position mapping
+            
+            # First pass: identify labels (likely field names)
             for block_idx, block in enumerate(text_dict["blocks"]):
                 if "lines" in block:
                     for line_idx, line in enumerate(block["lines"]):
-                        line_text = " ".join([span["text"] for span in line["spans"]])
-                        
-                        # Create a unique ID for each line
-                        line_id = hashlib.md5(f"{page_num}_{block_idx}_{line_idx}_{line_text}".encode()).hexdigest()
-                        
-                        # Look for specific patterns like company names and addresses
-                        if "Deutsche Glasfaser" in line_text:
-                            result[line_id] = {
-                                "type": "CompanyName",
-                                "text": line_text.strip(),
-                                "metadata": {
-                                    "filetype": "application/pdf",
-                                    "page_number": page_num + 1,
-                                    "filename": file.filename,
-                                    "field_name": "company"
-                                }
-                            }
-                        elif "Tempton Technik" in line_text:
-                            result[line_id] = {
-                                "type": "Contractor",
-                                "text": line_text.strip(),
-                                "metadata": {
-                                    "filetype": "application/pdf",
-                                    "page_number": page_num + 1,
-                                    "filename": file.filename,
-                                    "field_name": "contractor"
-                                }
-                            }
-                        elif "Am Kuhm" in line_text or ("Borken" in line_text and any(c.isdigit() for c in line_text)):
-                            result[line_id] = {
-                                "type": "Address",
-                                "text": line_text.strip(),
-                                "metadata": {
-                                    "filetype": "application/pdf",
-                                    "page_number": page_num + 1,
-                                    "filename": file.filename,
-                                    "field_name": "address"
-                                }
-                            }
-                        elif "Heuweg" in line_text or "Vlotho" in line_text:
-                            result[line_id] = {
-                                "type": "InstallationAddress",
-                                "text": line_text.strip(),
-                                "metadata": {
-                                    "filetype": "application/pdf",
-                                    "page_number": page_num + 1,
-                                    "filename": file.filename,
-                                    "field_name": "installation_address"
-                                }
-                            }
-                        elif any(name in line_text for name in ["Sven Steininger"]):
-                            result[line_id] = {
-                                "type": "Person",
-                                "text": line_text.strip(),
-                                "metadata": {
-                                    "filetype": "application/pdf",
-                                    "page_number": page_num + 1,
-                                    "filename": file.filename,
-                                    "field_name": "inspector"
-                                }
-                            }
-                        elif any(date_pattern in line_text for date_pattern in ["24.01.202", "24.01.2024", "24.01.2025"]):
-                            result[line_id] = {
-                                "type": "Date",
-                                "text": line_text.strip(),
-                                "metadata": {
-                                    "filetype": "application/pdf",
-                                    "page_number": page_num + 1,
-                                    "filename": file.filename,
-                                    "field_name": "inspection_date"
-                                }
-                            }
-                        else:
-                            # For all other text, process individual spans
-                            for span_idx, span in enumerate(line["spans"]):
-                                span_text = span["text"].strip()
-                                if not span_text:
-                                    continue
-                                
-                                # Create a unique ID for this span
-                                span_id = hashlib.md5(f"{page_num}_{block_idx}_{line_idx}_{span_idx}_{span_text}".encode()).hexdigest()
-                                
-                                # Determine text type
-                                font_size = span["size"]
-                                is_bold = span["flags"] & 2 > 0
-                                
-                                if is_bold or font_size > 10:
-                                    text_type = "Title"
-                                elif len(span_text.split()) > 10:
-                                    text_type = "NarrativeText"
-                                else:
-                                    text_type = "UncategorizedText"
-                                
-                                result[span_id] = {
-                                    "type": text_type,
-                                    "text": span_text,
-                                    "metadata": {
-                                        "filetype": "application/pdf",
-                                        "page_number": page_num + 1,
-                                        "filename": file.filename,
-                                        "font_size": font_size,
-                                        "is_bold": is_bold
-                                    }
+                        for span in line["spans"]:
+                            text = span["text"].strip()
+                            if text.endswith(":") or (len(text) < 30 and text.isupper()):
+                                # This is likely a label
+                                label_key = text.rstrip(":")
+                                labels[label_key] = {
+                                    "bbox": line["bbox"],
+                                    "page": page_num,
+                                    "block": block_idx
                                 }
             
-            # Try to extract tables - more complex patterns
-            tables = page.find_tables()
-            for table_idx, table in enumerate(tables):
-                table_id = hashlib.md5(f"table_{page_num}_{table_idx}".encode()).hexdigest()
+            # Second pass: extract all text blocks with type classification
+            for block_idx, block in enumerate(text_dict["blocks"]):
+                if "lines" in block:
+                    # Look for potential address patterns
+                    block_text = " ".join([
+                        span["text"] 
+                        for line in block["lines"] 
+                        for span in line["spans"]
+                    ])
+                    
+                    # Identify address patterns (postal code patterns in European format)
+                    address_pattern = r'\b\d{4,5}[\s,]\s*\w+'
+                    is_likely_address = bool(re.search(address_pattern, block_text))
+                    
+                    # Identify date patterns
+                    date_pattern = r'\b\d{1,2}[.-]\d{1,2}[.-]\d{2,4}\b'
+                    has_date = bool(re.search(date_pattern, block_text))
+                    
+                    # Process each line
+                    for line_idx, line in enumerate(block["lines"]):
+                        line_text = " ".join([span["text"] for span in line["spans"]])
+                        
+                        # Skip empty lines
+                        if not line_text.strip():
+                            continue
+                        
+                        # Create a unique ID
+                        line_id = hashlib.md5(f"{page_num}_{block_idx}_{line_idx}_{line_text}".encode()).hexdigest()
+                        
+                        # Determine if this line is a value for a label
+                        label_match = None
+                        for label, info in labels.items():
+                            # Check if this line is near a label (slightly to the right and/or below)
+                            if (info["page"] == page_num and 
+                                info["block"] == block_idx and
+                                abs(line["bbox"][1] - info["bbox"][3]) < 15):  # Within 15 points vertically
+                                label_match = label
+                                break
+                        
+                        # Classify text types based on patterns and structure
+                        text_type = "UncategorizedText"
+                        metadata = {
+                            "filetype": "application/pdf",
+                            "page_number": page_num + 1,
+                            "filename": file.filename
+                        }
+                        
+                        # Use font properties
+                        font_props = line["spans"][0] if line["spans"] else None
+                        is_bold = font_props and (font_props.get("flags", 0) & 2 > 0)
+                        font_size = font_props["size"] if font_props else 0
+                        
+                        # Determine text type based on features
+                        if is_likely_address and re.search(r'\d', line_text):
+                            text_type = "Address"
+                        elif has_date and re.search(date_pattern, line_text):
+                            text_type = "Date"
+                        elif re.search(r'GmbH|AG|Co\.|Inc\.|Ltd\.', line_text):
+                            text_type = "Organization"
+                        elif is_bold or font_size > 10:
+                            text_type = "Title"
+                        elif label_match:
+                            text_type = "FieldValue"
+                            metadata["field_name"] = label_match
+                        elif len(line_text.split()) > 10:
+                            text_type = "NarrativeText"
+                        
+                        # Add to results
+                        result[line_id] = {
+                            "type": text_type,
+                            "text": line_text.strip(),
+                            "metadata": metadata
+                        }
+                        
+                        # Also process individual spans for more detailed extraction
+                        for span_idx, span in enumerate(line["spans"]):
+                            span_text = span["text"].strip()
+                            if not span_text or span_text == line_text.strip():
+                                continue
+                            
+                            span_id = hashlib.md5(f"{page_num}_{block_idx}_{line_idx}_{span_idx}_{span_text}".encode()).hexdigest()
+                            
+                            # Determine span text type
+                            span_type = "UncategorizedText"
+                            if span.get("flags", 0) & 2 > 0 or span.get("size", 0) > 10:
+                                span_type = "Title" 
+                            
+                            result[span_id] = {
+                                "type": span_type,
+                                "text": span_text,
+                                "metadata": {
+                                    "filetype": "application/pdf",
+                                    "page_number": page_num + 1,
+                                    "filename": file.filename,
+                                    "parent_line": line_id
+                                }
+                            }
+            
+            # Extract tables (if present)
+            try:
+                # Simple approach using text in a grid pattern
+                table_regions = []
+                # Look for regions with multiple lines containing similar patterns (e.g., numbers, separators)
+                # This is a simple heuristic - more advanced table detection might be needed
                 
-                # Create a text representation of the table
-                table_text = []
-                for row in table.rows:
-                    row_text = []
-                    for cell in row:
-                        cell_text = page.get_text("text", clip=cell.rect)
-                        row_text.append(cell_text.strip())
-                    table_text.append(" | ".join(row_text))
-                
-                result[table_id] = {
-                    "type": "Table",
-                    "text": "\n".join(table_text),
+                # Process without relying on PyMuPDF's table finder
+                for block_idx, block in enumerate(text_dict["blocks"]):
+                    if "lines" in block and len(block["lines"]) > 3:  # Potential table if many lines
+                        # Check if lines have similar structure (indicator of table)
+                        line_structures = []
+                        for line in block["lines"]:
+                            line_text = " ".join([span["text"] for span in line["spans"]])
+                            # Create a pattern signature (e.g., "text|num|text|num")
+                            pattern = ""
+                            for part in re.findall(r'[\d.]+|\w+|[^\w\s]', line_text):
+                                if re.match(r'^\d+(\.\d+)?$', part):
+                                    pattern += "N"  # Number
+                                elif re.match(r'^[A-Za-z]+$', part):
+                                    pattern += "T"  # Text
+                                else:
+                                    pattern += "S"  # Symbol
+                            line_structures.append(pattern)
+                        
+                        # If multiple lines have similar structure, likely a table
+                        if len(set(line_structures)) < len(line_structures) / 2:
+                            table_id = hashlib.md5(f"table_{page_num}_{block_idx}".encode()).hexdigest()
+                            result[table_id] = {
+                                "type": "Table",
+                                "text": "\n".join([
+                                    " | ".join([span["text"] for span in line["spans"]]) 
+                                    for line in block["lines"]
+                                ]),
+                                "metadata": {
+                                    "filetype": "application/pdf",
+                                    "page_number": page_num + 1,
+                                    "filename": file.filename
+                                }
+                            }
+            except Exception as table_error:
+                # Log table extraction error but continue
+                table_error_id = hashlib.md5(f"table_error_{page_num}".encode()).hexdigest()
+                result[table_error_id] = {
+                    "type": "Error",
+                    "text": f"Table extraction error: {str(table_error)}",
                     "metadata": {
                         "filetype": "application/pdf",
                         "page_number": page_num + 1,
                         "filename": file.filename
                     }
                 }
-        
+                
         # Wrap in array as per example
         final_result = [result]
         
