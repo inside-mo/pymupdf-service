@@ -75,6 +75,45 @@ def upload_file():
             return f"An error occurred while processing the PDF: {str(e)}", 500
     return render_template_string(HTML_TEMPLATE)
 
+@app.route('/api/extract_pages', methods=['POST'])
+@auth.login_required
+def extract_pages():
+    if 'pdf_file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    file = request.files['pdf_file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    page_start = request.form.get('page_start', type=int)
+    page_end = request.form.get('page_end', type=int)
+    if page_start is None or page_end is None:
+        return jsonify({"error": "Both page_start and page_end must be provided"}), 400
+    if page_start < 1 or page_end < 1:
+        return jsonify({"error": "page_start and page_end must be positive integers"}), 400
+    if page_start > page_end:
+        return jsonify({"error": "page_start cannot be greater than page_end"}), 400
+    try:
+        # Open the original PDF
+        pdf = fitz.open(stream=file.read(), filetype="pdf")
+        total_pages = pdf.page_count
+        # Adjust page_end if it exceeds total_pages
+        if page_end > total_pages:
+            page_end = total_pages
+        # Create a new PDF to hold the extracted pages
+        new_pdf = fitz.open()
+        for page_num in range(page_start, page_end + 1):
+            new_pdf.insert_pdf(pdf, from_page=page_num - 1, to_page=page_num - 1)  # Zero-based indexing
+        # Prepare the PDF to be returned
+        pdf_stream = io.BytesIO()
+        new_pdf.save(pdf_stream)  # Save to an in-memory stream
+        new_pdf.close()
+        pdf_stream.seek(0)  # Reset stream position to the beginning
+        return send_file(pdf_stream, as_attachment=True, download_name="extracted_pages.pdf", mimetype='application/pdf')
+    except Exception as e:
+        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True)
+
 @app.route('/api/extract-text', methods=['POST'])
 @auth.login_required
 def extract_text():
