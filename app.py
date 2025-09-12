@@ -424,6 +424,73 @@ def extract_form():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/api/extract-form-structure', methods=['POST'])
+@auth.login_required
+def extract_form_structure():
+    if 'pdf_file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    
+    file = request.files['pdf_file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    
+    try:
+        doc = fitz.open(stream=file.read(), filetype="pdf")
+        form_content = []
+        
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            text_dict = page.get_text("dict")
+            
+            # Process text blocks
+            for block in text_dict["blocks"]:
+                if "lines" in block:
+                    for line in block["lines"]:
+                        text = " ".join(span["text"] for span in line["spans"])
+                        if text.strip():
+                            # Look for label patterns (ends with colon or numbered items)
+                            if text.strip().endswith(':') or re.match(r'^\d+\.\d+\.*\d*\s', text.strip()):
+                                form_content.append({
+                                    'type': 'label',
+                                    'text': text.strip(),
+                                    'bbox': line["bbox"],
+                                    'page': page_num + 1
+                                })
+                                
+                            # Look for checkbox-like patterns
+                            elif "OK" in text or "Nicht OK" in text or "☐" in text or "☑" in text:
+                                form_content.append({
+                                    'type': 'checkbox_group',
+                                    'text': text.strip(),
+                                    'bbox': line["bbox"],
+                                    'page': page_num + 1
+                                })
+                            
+                            # Look for input field patterns (underscores or empty spaces)
+                            elif '_____' in text or re.search(r'\s{5,}', text):
+                                form_content.append({
+                                    'type': 'input_field',
+                                    'text': text.strip(),
+                                    'bbox': line["bbox"],
+                                    'page': page_num + 1
+                                })
+                            
+                            # Regular text
+                            else:
+                                form_content.append({
+                                    'type': 'text',
+                                    'text': text.strip(),
+                                    'bbox': line["bbox"],
+                                    'page': page_num + 1
+                                })
+        
+        # Sort by page and position
+        form_content.sort(key=lambda x: (x['page'], x['bbox'][1], x['bbox'][0]))
+        return jsonify(form_content)
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/redact', methods=['POST'])
 @auth.login_required
 def redact():
