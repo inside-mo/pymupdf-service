@@ -339,24 +339,54 @@ def get_checkbox_values(page):
             checkboxes[widget.field_name] = widget.field_value
     return checkboxes
 
-def extract_form_content(pdf_path):
+def extract_form_content_ordered(pdf_path):
     doc = fitz.open(pdf_path)
-    result = {}
+    ordered_content = []
     
-    for page in doc:
-        # Get all form fields
+    for page_num in range(len(doc)):
+        page = doc[page_num]
+        page_content = []
+        
+        # Get form fields
         fields = page.widgets()
         for field in fields:
-            if field.field_type in (fitz.PDF_WIDGET_TYPE_CHECKBOX, fitz.PDF_WIDGET_TYPE_RADIO):
-                result[field.field_name] = field.field_value
-            elif field.field_type == fitz.PDF_WIDGET_TYPE_TEXT:
-                result[field.field_name] = field.field_value
+            rect = field.rect
+            page_content.append({
+                'type': 'form_field',
+                'name': field.field_name,
+                'value': field.field_value,
+                'y_pos': rect.y0,
+                'x_pos': rect.x0,
+                'field_type': field.field_type
+            })
+            
+        # Get text blocks
+        text_blocks = page.get_text("dict")["blocks"]
+        for block in text_blocks:
+            if "lines" in block:
+                for line in block["lines"]:
+                    text = " ".join(span["text"] for span in line["spans"])
+                    if text.strip():
+                        page_content.append({
+                            'type': 'text',
+                            'content': text.strip(),
+                            'y_pos': line["bbox"][1],
+                            'x_pos': line["bbox"][0]
+                        })
+        
+        # Sort page content by vertical position
+        page_content.sort(key=lambda x: (x['y_pos'], x['x_pos']))
+        ordered_content.extend(page_content)
+    
+    return ordered_content
 
-        # Get text content
-        text = page.get_text("dict")
-        # Process text blocks...
-
-    return result
+# Usage
+content = extract_form_content_ordered("your_pdf.pdf")
+for item in content:
+    if item['type'] == 'form_field':
+        print(f"Form Field: {item['name']} = {item['value']}")
+    else:
+        print(f"Text: {item['content']}")
 
 @app.route('/api/redact', methods=['POST'])
 @auth.login_required
