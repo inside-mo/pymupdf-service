@@ -17,7 +17,7 @@ RUN pip install -r requirements.txt
 COPY . .
 
 # Expose the port the app runs on
-EXPOSE 5000
+EXPOSE 6000
 
 # Define the default command to run the app
-CMD ["python", "app.py"]
+CMD ["gunicorn", "--bind", "0.0.0.0:6000", "app:app"]
