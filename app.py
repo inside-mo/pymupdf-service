@@ -112,7 +112,7 @@ def extract_pages():
         return jsonify({"error": f"An error occurred: {str(e)}"}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=6000, debug=True)
 
 @app.route('/api/extract-text', methods=['POST'])
 @auth.login_required
@@ -386,6 +386,3 @@ def redact():
         return send_file(out, mimetype="application/pdf", as_attachment=True, download_name="redacted.pdf")
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
