@@ -332,61 +332,97 @@ def extract_text():
 
 import fitz
 
-def get_checkbox_values(page):
-    checkboxes = {}
-    for widget in page.widgets():
-        if widget.field_type == fitz.PDF_WIDGET_TYPE_CHECKBOX:
-            checkboxes[widget.field_name] = widget.field_value
-    return checkboxes
-
-def extract_form_content_ordered(pdf_path):
-    doc = fitz.open(pdf_path)
-    ordered_content = []
+@app.route('/api/get-checkboxes', methods=['POST'])
+@auth.login_required
+def get_checkboxes():
+    if 'pdf_file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
     
-    for page_num in range(len(doc)):
-        page = doc[page_num]
-        page_content = []
+    file = request.files['pdf_file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    
+    try:
+        doc = fitz.open(stream=file.read(), filetype="pdf")
+        checkbox_content = []
         
-        # Get form fields
-        fields = page.widgets()
-        for field in fields:
-            rect = field.rect
-            page_content.append({
-                'type': 'form_field',
-                'name': field.field_name,
-                'value': field.field_value,
-                'y_pos': rect.y0,
-                'x_pos': rect.x0,
-                'field_type': field.field_type
-            })
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            fields = page.widgets()
             
-        # Get text blocks
-        text_blocks = page.get_text("dict")["blocks"]
-        for block in text_blocks:
-            if "lines" in block:
-                for line in block["lines"]:
-                    text = " ".join(span["text"] for span in line["spans"])
-                    if text.strip():
-                        page_content.append({
-                            'type': 'text',
-                            'content': text.strip(),
-                            'y_pos': line["bbox"][1],
-                            'x_pos': line["bbox"][0]
-                        })
+            for field in fields:
+                if field.field_type == fitz.PDF_WIDGET_TYPE_CHECKBOX:
+                    rect = field.rect
+                    checkbox_content.append({
+                        'name': field.field_name,
+                        'value': field.field_value,
+                        'y_pos': rect.y0,
+                        'x_pos': rect.x0,
+                        'page': page_num + 1
+                    })
+            
+        # Sort by page and position
+        checkbox_content.sort(key=lambda x: (x['page'], x['y_pos'], x['x_pos']))
+        return jsonify(checkbox_content)
         
-        # Sort page content by vertical position
-        page_content.sort(key=lambda x: (x['y_pos'], x['x_pos']))
-        ordered_content.extend(page_content)
-    
-    return ordered_content
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-# Usage
-content = extract_form_content_ordered("your_pdf.pdf")
-for item in content:
-    if item['type'] == 'form_field':
-        print(f"Form Field: {item['name']} = {item['value']}")
-    else:
-        print(f"Text: {item['content']}")
+@app.route('/api/extract-form', methods=['POST'])
+@auth.login_required
+def extract_form():
+    if 'pdf_file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    
+    file = request.files['pdf_file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    
+    try:
+        doc = fitz.open(stream=file.read(), filetype="pdf")
+        ordered_content = []
+        
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            page_content = []
+            
+            # Get form fields
+            fields = page.widgets()
+            for field in fields:
+                rect = field.rect
+                page_content.append({
+                    'type': 'form_field',
+                    'name': field.field_name,
+                    'value': field.field_value,
+                    'y_pos': rect.y0,
+                    'x_pos': rect.x0,
+                    'field_type': field.field_type,
+                    'page': page_num + 1
+                })
+                
+            # Get text blocks
+            text_blocks = page.get_text("dict")["blocks"]
+            for block in text_blocks:
+                if "lines" in block:
+                    for line in block["lines"]:
+                        text = " ".join(span["text"] for span in line["spans"])
+                        if text.strip():
+                            page_content.append({
+                                'type': 'text',
+                                'content': text.strip(),
+                                'y_pos': line["bbox"][1],
+                                'x_pos': line["bbox"][0],
+                                'page': page_num + 1
+                            })
+            
+            # Sort page content by vertical position
+            page_content.sort(key=lambda x: (x['y_pos'], x['x_pos']))
+            ordered_content.extend(page_content)
+        
+        return jsonify(ordered_content)
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/redact', methods=['POST'])
 @auth.login_required
