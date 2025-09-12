@@ -330,6 +330,34 @@ def extract_text():
     except Exception as e:
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
+import fitz
+
+def get_checkbox_values(page):
+    checkboxes = {}
+    for widget in page.widgets():
+        if widget.field_type == fitz.PDF_WIDGET_TYPE_CHECKBOX:
+            checkboxes[widget.field_name] = widget.field_value
+    return checkboxes
+
+def extract_form_content(pdf_path):
+    doc = fitz.open(pdf_path)
+    result = {}
+    
+    for page in doc:
+        # Get all form fields
+        fields = page.widgets()
+        for field in fields:
+            if field.field_type in (fitz.PDF_WIDGET_TYPE_CHECKBOX, fitz.PDF_WIDGET_TYPE_RADIO):
+                result[field.field_name] = field.field_value
+            elif field.field_type == fitz.PDF_WIDGET_TYPE_TEXT:
+                result[field.field_name] = field.field_value
+
+        # Get text content
+        text = page.get_text("dict")
+        # Process text blocks...
+
+    return result
+
 @app.route('/api/redact', methods=['POST'])
 @auth.login_required
 def redact():
