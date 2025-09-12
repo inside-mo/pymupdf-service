@@ -368,129 +368,92 @@ def get_checkboxes():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route('/api/extract-form', methods=['POST'])
+@app.route('/api/extract-all-fields', methods=['POST'])
 @auth.login_required
-def extract_form():
+def extract_all_fields():
     if 'pdf_file' not in request.files:
         return jsonify({"error": "No file part"}), 400
     
     file = request.files['pdf_file']
-    if file.filename == '':
-        return jsonify({"error": "No selected file"}), 400
     
     try:
         doc = fitz.open(stream=file.read(), filetype="pdf")
-        ordered_content = []
+        results = {}
         
-        for page_num in range(len(doc)):
-            page = doc[page_num]
-            page_content = []
+        for page in doc:
+            blocks = page.get_text("dict")["blocks"]
             
-            # Get form fields
-            fields = page.widgets()
-            for field in fields:
-                rect = field.rect
-                page_content.append({
-                    'type': 'form_field',
-                    'name': field.field_name,
-                    'value': field.field_value,
-                    'y_pos': rect.y0,
-                    'x_pos': rect.x0,
-                    'field_type': field.field_type,
-                    'page': page_num + 1
-                })
-                
-            # Get text blocks
-            text_blocks = page.get_text("dict")["blocks"]
-            for block in text_blocks:
-                if "lines" in block:
-                    for line in block["lines"]:
-                        text = " ".join(span["text"] for span in line["spans"])
-                        if text.strip():
-                            page_content.append({
-                                'type': 'text',
-                                'content': text.strip(),
-                                'y_pos': line["bbox"][1],
-                                'x_pos': line["bbox"][0],
-                                'page': page_num + 1
-                            })
-            
-            # Sort page content by vertical position
-            page_content.sort(key=lambda x: (x['y_pos'], x['x_pos']))
-            ordered_content.extend(page_content)
+            for i, block in enumerate(blocks):
+                if "lines" not in block:
+                    continue
+                    
+                for line in block["lines"]:
+                    text = " ".join(span["text"] for span in line["spans"]).strip()
+                    
+                    # Case 1: Numbered items
+                    if re.match(r'^\d+\.\d+\.\d+\s', text):
+                        label = text
+                        value = find_checkbox_value(blocks, line["bbox"])
+                        if value:
+                            results[label] = value
+                            
+                    # Case 2: Question/Comment fields (ending with colon)
+                    elif text.endswith(':'):
+                        label = text.rstrip(':')
+                        # Look for answer in next block or lines
+                        value = find_field_value(blocks, i, line["bbox"])
+                        if value:
+                            results[label] = value
+                            
+                    # Case 3: "Bemerkungen" fields
+                    elif text.startswith('Bemerkungen'):
+                        label = text
+                        value = find_field_value(blocks, i, line["bbox"])
+                        if value:
+                            results[label] = value
         
-        return jsonify(ordered_content)
+        return jsonify(results)
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route('/api/extract-form-structure', methods=['POST'])
-@auth.login_required
-def extract_form_structure():
-    if 'pdf_file' not in request.files:
-        return jsonify({"error": "No file part"}), 400
+def find_checkbox_value(blocks, label_bbox):
+    """Find closest OK/Nicht OK value to the label"""
+    y_pos = label_bbox[1]
+    possible_values = ["OK", "Nicht OK", "Nicht notwendig"]
     
-    file = request.files['pdf_file']
-    if file.filename == '':
-        return jsonify({"error": "No selected file"}), 400
-    
-    try:
-        doc = fitz.open(stream=file.read(), filetype="pdf")
-        form_content = []
-        
-        for page_num in range(len(doc)):
-            page = doc[page_num]
-            text_dict = page.get_text("dict")
-            
-            # Process text blocks
-            for block in text_dict["blocks"]:
-                if "lines" in block:
-                    for line in block["lines"]:
-                        text = " ".join(span["text"] for span in line["spans"])
-                        if text.strip():
-                            # Look for label patterns (ends with colon or numbered items)
-                            if text.strip().endswith(':') or re.match(r'^\d+\.\d+\.*\d*\s', text.strip()):
-                                form_content.append({
-                                    'type': 'label',
-                                    'text': text.strip(),
-                                    'bbox': line["bbox"],
-                                    'page': page_num + 1
-                                })
-                                
-                            # Look for checkbox-like patterns
-                            elif "OK" in text or "Nicht OK" in text or "☐" in text or "☑" in text:
-                                form_content.append({
-                                    'type': 'checkbox_group',
-                                    'text': text.strip(),
-                                    'bbox': line["bbox"],
-                                    'page': page_num + 1
-                                })
-                            
-                            # Look for input field patterns (underscores or empty spaces)
-                            elif '_____' in text or re.search(r'\s{5,}', text):
-                                form_content.append({
-                                    'type': 'input_field',
-                                    'text': text.strip(),
-                                    'bbox': line["bbox"],
-                                    'page': page_num + 1
-                                })
-                            
-                            # Regular text
-                            else:
-                                form_content.append({
-                                    'type': 'text',
-                                    'text': text.strip(),
-                                    'bbox': line["bbox"],
-                                    'page': page_num + 1
-                                })
-        
-        # Sort by page and position
-        form_content.sort(key=lambda x: (x['page'], x['bbox'][1], x['bbox'][0]))
-        return jsonify(form_content)
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    for block in blocks:
+        if "lines" in block:
+            for line in block["lines"]:
+                text = " ".join(span["text"] for span in line["spans"])
+                if any(val in text for val in possible_values):
+                    if abs(line["bbox"][1] - y_pos) < 20:
+                        for val in possible_values:
+                            if val in text:
+                                return val
+    return None
 
+def find_field_value(blocks, current_block_idx, label_bbox):
+    """Find field value in subsequent text"""
+    y_pos = label_bbox[1]
+    value_text = []
+    
+    # Look in next few blocks
+    for i in range(current_block_idx + 1, min(current_block_idx + 3, len(blocks))):
+        block = blocks[i]
+        if "lines" not in block:
+            continue
+            
+        for line in block["lines"]:
+            text = " ".join(span["text"] for span in line["spans"]).strip()
+            # Skip if this looks like another label
+            if text.endswith(':') or re.match(r'^\d+\.\d+\.\d+\s', text):
+                break
+            if text and abs(line["bbox"][1] - y_pos) < 50:  # adjust distance as needed
+                value_text.append(text)
+    
+    return " ".join(value_text) if value_text else None
+    
 @app.route('/api/redact', methods=['POST'])
 @auth.login_required
 def redact():
