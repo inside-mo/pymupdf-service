@@ -2,3 +2,4 @@ Flask
 PyMuPDF
 Pillow
 Flask-HTTPAuth
+gunicorn
