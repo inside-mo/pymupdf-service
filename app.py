@@ -371,14 +371,26 @@ def get_checkboxes():
             page = doc[page_num]
             page_key = f"page_{page_num + 1}"
             
-            # 1. Get all text blocks to find form fields
+            # Get all text blocks
             text_blocks = page.get_text("dict")["blocks"]
+            
+            # First pass: Build a map of positions to values
+            value_map = {}
             for block in text_blocks:
                 if "lines" in block:
                     for line in block["lines"]:
-                        text = " ".join(span["text"] for span in line["spans"])
+                        text = " ".join(span["text"] for span in line["spans"]).strip()
+                        if text and text != "*":  # Skip empty or asterisk-only text
+                            bbox = line["bbox"]
+                            value_map[bbox[1]] = text  # Use y-position as key
+            
+            # Second pass: Process form fields and checkboxes
+            for block in text_blocks:
+                if "lines" in block:
+                    for line in block["lines"]:
+                        text = " ".join(span["text"] for span in line["spans"]).strip()
                         
-                        # Look for checkboxes (any text that might be a checkbox option)
+                        # Look for checkbox indicators
                         if any(keyword in text for keyword in ["OK", "Erfolgreich", "Zugang", "Ja", "Nein"]):
                             rect = fitz.Rect(line["bbox"])
                             left_area = fitz.Rect(rect.x0 - 20, rect.y0, rect.x0, rect.y1)
@@ -387,102 +399,46 @@ def get_checkboxes():
                             if has_mark_in_area(pix):
                                 form_content[page_key]["checkboxes"].append({
                                     'name': text,
-                                    'value': True,
+                                    'value': True,  # It's checked
                                     'y_pos': rect.y0,
                                     'x_pos': rect.x0,
                                     'bbox': [rect.x0, rect.y0, rect.x1, rect.y1],
                                     'detection_method': 'visual'
                                 })
                         
-                        # Look for form fields (text ending with colon followed by value)
+                        # Look for form fields
                         if ':' in text:
-                            parts = text.split(':', 1)
-                            if len(parts) == 2:
-                                field_name = parts[0].strip()
-                                field_value = parts[1].strip()
-                                if field_value:  # Only add if there's a value
-                                    form_content[page_key]["form_fields"][field_name] = {
-                                        "value": field_value,
-                                        "bbox": line["bbox"],
-                                        "position": {
-                                            "x": line["bbox"][0],
-                                            "y": line["bbox"][1]
-                                        }
+                            field_name, field_value = text.split(':', 1)
+                            field_name = field_name.strip()
+                            field_value = field_value.strip()
+                            
+                            # If no direct value after colon, look for nearby text
+                            if not field_value or field_value == '*':
+                                bbox = line["bbox"]
+                                # Look for value in nearby positions
+                                for y_pos, value in value_map.items():
+                                    if abs(y_pos - bbox[1]) < 20 and value != field_name:
+                                        field_value = value
+                                        break
+                            
+                            if field_value and field_value != '*':  # Only add if we found a real value
+                                form_content[page_key]["form_fields"][field_name] = {
+                                    "value": field_value,
+                                    "bbox": line["bbox"],
+                                    "position": {
+                                        "x": line["bbox"][0],
+                                        "y": line["bbox"][1]
                                     }
+                                }
             
-            # 2. Also check for actual form widgets
-            fields = page.widgets()
-            for field in fields:
-                field_type = field.field_type
-                field_name = field.field_name
-                field_value = field.field_value
-                
-                if field_type == fitz.PDF_WIDGET_TYPE_CHECKBOX:
-                    form_content[page_key]["checkboxes"].append({
-                        'name': field_name,
-                        'value': bool(field_value),
-                        'y_pos': field.rect.y0,
-                        'x_pos': field.rect.x0,
-                        'bbox': [field.rect.x0, field.rect.y0, field.rect.x1, field.rect.y1],
-                        'detection_method': 'widget'
-                    })
-                else:
-                    # Other form field types (text, choice, etc.)
-                    form_content[page_key]["form_fields"][field_name] = {
-                        "value": field_value,
-                        "type": field_type,
-                        "bbox": [field.rect.x0, field.rect.y0, field.rect.x1, field.rect.y1],
-                        "position": {
-                            "x": field.rect.x0,
-                            "y": field.rect.y0
-                        }
-                    }
-            
-            # Sort checkboxes by vertical position within each page
+            # Sort checkboxes by vertical position
             form_content[page_key]["checkboxes"].sort(key=lambda x: (x['y_pos'], x['x_pos']))
-            
+        
         doc.close()
         return jsonify(form_content)
         
     except Exception as e:
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
-
-def find_checkbox_value(blocks, label_bbox):
-    """Find closest OK/Nicht OK value to the label"""
-    y_pos = label_bbox[1]
-    possible_values = ["OK", "Nicht OK", "Nicht notwendig"]
-    
-    for block in blocks:
-        if "lines" in block:
-            for line in block["lines"]:
-                text = " ".join(span["text"] for span in line["spans"])
-                if any(val in text for val in possible_values):
-                    if abs(line["bbox"][1] - y_pos) < 20:
-                        for val in possible_values:
-                            if val in text:
-                                return val
-    return None
-
-def find_field_value(blocks, current_block_idx, label_bbox):
-    """Find field value in subsequent text"""
-    y_pos = label_bbox[1]
-    value_text = []
-    
-    # Look in next few blocks
-    for i in range(current_block_idx + 1, min(current_block_idx + 3, len(blocks))):
-        block = blocks[i]
-        if "lines" not in block:
-            continue
-            
-        for line in block["lines"]:
-            text = " ".join(span["text"] for span in line["spans"]).strip()
-            # Skip if this looks like another label
-            if text.endswith(':') or re.match(r'^\d+\.\d+\.\d+\s', text):
-                break
-            if text and abs(line["bbox"][1] - y_pos) < 50:  # adjust distance as needed
-                value_text.append(text)
-    
-    return " ".join(value_text) if value_text else None
     
 @app.route('/api/redact', methods=['POST'])
 @auth.login_required
