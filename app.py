@@ -326,6 +326,19 @@ def extract_text():
             "traceback": traceback.format_exc()
         }), 500
 
+def has_mark_in_area(pixmap):
+    # Convert pixmap to bytes and analyze for dark pixels
+    # You might need to adjust these thresholds
+    samples = pixmap.samples
+    pixel_count = 0
+    dark_threshold = 200  # Adjust based on your PDF
+    
+    for i in range(0, len(samples), pixmap.n):
+        if samples[i] < dark_threshold:  # For grayscale
+            pixel_count += 1
+    
+    return pixel_count > (pixmap.width * pixmap.height * 0.1)  # 10% threshold
+
 @app.route('/api/get-checkboxes', methods=['POST'])
 @auth.login_required
 def get_checkboxes():
