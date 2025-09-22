@@ -339,6 +339,19 @@ def has_mark_in_area(pixmap):
     
     return pixel_count > (pixmap.width * pixmap.height * 0.1)  # 10% threshold
 
+def has_mark_in_area(pixmap):
+    # Convert pixmap to bytes and analyze for dark pixels
+    # You might need to adjust these thresholds
+    samples = pixmap.samples
+    pixel_count = 0
+    dark_threshold = 200  # Adjust based on your PDF
+    
+    for i in range(0, len(samples), pixmap.n):
+        if samples[i] < dark_threshold:  # For grayscale
+            pixel_count += 1
+    
+    return pixel_count > (pixmap.width * pixmap.height * 0.05)  # Reduced to 5% threshold for better sensitivity
+
 @app.route('/api/get-checkboxes', methods=['POST'])
 @auth.login_required
 def get_checkboxes():
@@ -351,86 +364,78 @@ def get_checkboxes():
     
     try:
         doc = fitz.open(stream=file.read(), filetype="pdf")
-        result = []
+        checkbox_content = []
         
-        # Process each page
         for page_num in range(len(doc)):
             page = doc[page_num]
-            page_key = f"page_{page_num + 1}"
-            page_data = {
-                "page_number": page_num + 1,
-                "checkboxes": [],
-                "form_fields": {},
-                "metadata": {
-                    "filename": file.filename,
-                    "filetype": "application/pdf"
-                }
-            }
             
-            # Simple visual detection for all checkboxes
-            text = page.get_text("text")
-            text_dict = page.get_text("dict")
+            # 1. Try widget detection (existing)
+            fields = page.widgets()
+            for field in fields:
+                if field.field_type == fitz.PDF_WIDGET_TYPE_CHECKBOX:
+                    rect = field.rect
+                    checkbox_content.append({
+                        'name': field.field_name,
+                        'value': field.field_value,
+                        'y_pos': rect.y0,
+                        'x_pos': rect.x0,
+                        'page': page_num + 1,
+                        'detection_method': 'widget'
+                    })
             
-            # Process all blocks
-            for block in text_dict["blocks"]:
+            # 2. Add visual detection for all potential checkbox text
+            text_blocks = page.get_text("dict")["blocks"]
+            for block in text_blocks:
                 if "lines" in block:
                     for line in block["lines"]:
-                        line_text = " ".join([span["text"] for span in line["spans"]])
+                        text = " ".join(span["text"] for span in line["spans"]).strip()
                         
-                        # Check for checkbox indicators
-                        checkbox_keywords = ["OK", "Erfolgreich", "Zugang", "Wartung", "Standort", "Schlüssel"]
-                        if any(keyword in line_text for keyword in checkbox_keywords):
-                            # Get bounding box
-                            bbox = line["bbox"]
+                        # Skip empty lines or very long text (unlikely to be checkbox labels)
+                        if not text or len(text) > 100:
+                            continue
                             
-                            # Simple visual check - look for marks in a 20px area left of text
+                        # Identify potential checkbox text by common indicators
+                        checkbox_indicators = ["OK", "Nicht OK", "Ja", "Nein", "erfolgreich", "Zugang", 
+                                              "vorhanden", "beschädigt", "verschmutzt", "geprüft",
+                                              "erforderlich", "korrekt", "falsch"]
+                        
+                        is_likely_checkbox = any(indicator in text for indicator in checkbox_indicators)
+                        
+                        # Also look for patterns like options with short text
+                        is_option_like = (len(text) < 50 and not text.endswith(':') and
+                                          not text[0].isdigit() and not ':' in text)
+                        
+                        if is_likely_checkbox or is_option_like:
+                            # Get the surrounding area
+                            rect = fitz.Rect(line["bbox"])
+                            # Check for marks in the area left of the text
+                            left_area = fitz.Rect(rect.x0 - 20, rect.y0, rect.x0, rect.y1)
+                            
+                            # Get pixel data for the checkbox area
                             try:
-                                left_area = fitz.Rect(bbox[0] - 20, bbox[1], bbox[0], bbox[3])
-                                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=left_area)
-                                
-                                # Count dark pixels
-                                samples = pix.samples
-                                dark_pixels = sum(1 for i in range(0, len(samples), pix.n) if samples[i] < 200)
-                                pixel_count = pix.width * pix.height
-                                
-                                # If more than 5% dark pixels, likely a mark
-                                if dark_pixels > pixel_count * 0.05:
-                                    page_data["checkboxes"].append({
-                                        "name": line_text.strip(),
-                                        "value": True,
-                                        "x_pos": bbox[0],
-                                        "y_pos": bbox[1],
-                                        "bbox": [bbox[0], bbox[1], bbox[2], bbox[3]],
-                                        "detection_method": "visual"
+                                pix = page.get_pixmap(matrix=fitz.Matrix(3, 3), clip=left_area)
+                                # Analyze pixels for marks
+                                if has_mark_in_area(pix):
+                                    checkbox_content.append({
+                                        'name': text,
+                                        'value': True,
+                                        'y_pos': rect.y0,
+                                        'x_pos': rect.x0,
+                                        'page': page_num + 1,
+                                        'detection_method': 'visual'
                                     })
-                            except Exception as e:
-                                # Continue even if visual check fails
-                                pass
-                        
-                        # Simple form field detection - any line with a colon
-                        if ":" in line_text and len(line_text.split(":")) == 2:
-                            field_name, field_value = line_text.split(":", 1)
-                            field_name = field_name.strip()
-                            field_value = field_value.strip()
-                            
-                            # Only store if value isn't empty or just asterisk
-                            if field_value and field_value != "*":
-                                page_data["form_fields"][field_name] = {
-                                    "value": field_value,
-                                    "bbox": line["bbox"],
-                                    "position": {"x": line["bbox"][0], "y": line["bbox"][1]}
-                                }
-            
-            result.append(page_data)
+                            except Exception as check_error:
+                                # Skip this item if pixmap extraction fails
+                                continue
         
-        doc.close()
-        return jsonify(result)
+        # Sort results by page and position
+        checkbox_content.sort(key=lambda x: (x['page'], x['y_pos'], x['x_pos']))
+        
+        doc.close()  # Make sure to close the document
+        return jsonify(checkbox_content)
         
     except Exception as e:
-        return jsonify({
-            "error": str(e),
-            "traceback": traceback.format_exc()
-        }), 500
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
     
 @app.route('/api/redact', methods=['POST'])
 @auth.login_required
