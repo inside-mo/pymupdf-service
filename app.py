@@ -351,32 +351,29 @@ def get_checkboxes():
     
     try:
         doc = fitz.open(stream=file.read(), filetype="pdf")
-        checkbox_content = []
+        form_content = {
+            "checkboxes": [],
+            "form_fields": {}
+        }
         
         for page_num in range(len(doc)):
             page = doc[page_num]
             
-            # 1. Try widget detection (existing)
-            fields = page.widgets()
-            
-            # 2. Add visual detection for specific text patterns
+            # 1. Get all text blocks to find form fields
             text_blocks = page.get_text("dict")["blocks"]
             for block in text_blocks:
                 if "lines" in block:
                     for line in block["lines"]:
                         text = " ".join(span["text"] for span in line["spans"])
-                        # Look for your specific options
-                        if text in ["Wartung erfolgreich", "Kein Zugang", "Standort existiert nicht"]:
-                            # Get the surrounding area
+                        
+                        # Look for checkboxes (any text that might be a checkbox option)
+                        if any(keyword in text for keyword in ["OK", "Erfolgreich", "Zugang", "Ja", "Nein"]):
                             rect = fitz.Rect(line["bbox"])
-                            # Check for marks in the area left of the text
                             left_area = fitz.Rect(rect.x0 - 20, rect.y0, rect.x0, rect.y1)
-                            
-                            # Get pixel data for the checkbox area
                             pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=left_area)
-                            # Analyze pixels for marks (simplified)
+                            
                             if has_mark_in_area(pix):
-                                checkbox_content.append({
+                                form_content["checkboxes"].append({
                                     'name': text,
                                     'value': True,
                                     'y_pos': rect.y0,
@@ -384,61 +381,56 @@ def get_checkboxes():
                                     'page': page_num + 1,
                                     'detection_method': 'visual'
                                 })
-        
-        doc.close()  # Make sure to close the document
-        return jsonify(checkbox_content)
-        
-    except Exception as e:
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
-
-@app.route('/api/extract-all-fields', methods=['POST'])
-@auth.login_required
-def extract_all_fields():
-    if 'pdf_file' not in request.files:
-        return jsonify({"error": "No file part"}), 400
-    
-    file = request.files['pdf_file']
-    
-    try:
-        doc = fitz.open(stream=file.read(), filetype="pdf")
-        results = {}
-        
-        for page in doc:
-            blocks = page.get_text("dict")["blocks"]
+                        
+                        # Look for form fields (text ending with colon followed by value)
+                        if ':' in text:
+                            parts = text.split(':', 1)
+                            if len(parts) == 2:
+                                field_name = parts[0].strip()
+                                field_value = parts[1].strip()
+                                if field_value:  # Only add if there's a value
+                                    form_content["form_fields"][field_name] = {
+                                        "value": field_value,
+                                        "page": page_num + 1,
+                                        "position": {
+                                            "x": line["bbox"][0],
+                                            "y": line["bbox"][1]
+                                        }
+                                    }
             
-            for i, block in enumerate(blocks):
-                if "lines" not in block:
-                    continue
-                    
-                for line in block["lines"]:
-                    text = " ".join(span["text"] for span in line["spans"]).strip()
-                    
-                    # Case 1: Numbered items
-                    if re.match(r'^\d+\.\d+\.\d+\s', text):
-                        label = text
-                        value = find_checkbox_value(blocks, line["bbox"])
-                        if value:
-                            results[label] = value
-                            
-                    # Case 2: Question/Comment fields (ending with colon)
-                    elif text.endswith(':'):
-                        label = text.rstrip(':')
-                        # Look for answer in next block or lines
-                        value = find_field_value(blocks, i, line["bbox"])
-                        if value:
-                            results[label] = value
-                            
-                    # Case 3: "Bemerkungen" fields
-                    elif text.startswith('Bemerkungen'):
-                        label = text
-                        value = find_field_value(blocks, i, line["bbox"])
-                        if value:
-                            results[label] = value
+            # 2. Also check for actual form widgets
+            fields = page.widgets()
+            for field in fields:
+                field_type = field.field_type
+                field_name = field.field_name
+                field_value = field.field_value
+                
+                if field_type == fitz.PDF_WIDGET_TYPE_CHECKBOX:
+                    form_content["checkboxes"].append({
+                        'name': field_name,
+                        'value': bool(field_value),
+                        'y_pos': field.rect.y0,
+                        'x_pos': field.rect.x0,
+                        'page': page_num + 1,
+                        'detection_method': 'widget'
+                    })
+                else:
+                    # Other form field types (text, choice, etc.)
+                    form_content["form_fields"][field_name] = {
+                        "value": field_value,
+                        "type": field_type,
+                        "page": page_num + 1,
+                        "position": {
+                            "x": field.rect.x0,
+                            "y": field.rect.y0
+                        }
+                    }
         
-        return jsonify(results)
+        doc.close()
+        return jsonify(form_content)
         
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500 
 
 def find_checkbox_value(blocks, label_bbox):
     """Find closest OK/Nicht OK value to the label"""
