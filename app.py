@@ -353,7 +353,6 @@ def get_checkboxes():
         doc = fitz.open(stream=file.read(), filetype="pdf")
         form_content = {}
         
-        # Initialize structure for each page
         for page_num in range(len(doc)):
             page_key = f"page_{page_num + 1}"
             form_content[page_key] = {
@@ -366,31 +365,54 @@ def get_checkboxes():
                 }
             }
         
-        # Process each page
         for page_num in range(len(doc)):
             page = doc[page_num]
             page_key = f"page_{page_num + 1}"
             
-            # Get all text blocks
+            # Create a mapping of y-positions to field names and values
+            field_map = {}
             text_blocks = page.get_text("dict")["blocks"]
             
-            # First pass: Build a map of positions to values
-            value_map = {}
+            # First pass: Collect all text elements
             for block in text_blocks:
                 if "lines" in block:
                     for line in block["lines"]:
-                        text = " ".join(span["text"] for span in line["spans"]).strip()
-                        if text and text != "*":  # Skip empty or asterisk-only text
-                            bbox = line["bbox"]
-                            value_map[bbox[1]] = text  # Use y-position as key
-            
-            # Second pass: Process form fields and checkboxes
-            for block in text_blocks:
-                if "lines" in block:
-                    for line in block["lines"]:
+                        y_pos = line["bbox"][1]  # Y position as key
                         text = " ".join(span["text"] for span in line["spans"]).strip()
                         
-                        # Look for checkbox indicators
+                        # If text contains a field name
+                        if ':' in text:
+                            field_name = text.split(':')[0].strip()
+                            if field_name not in field_map:
+                                field_map[field_name] = {
+                                    "y_pos": y_pos,
+                                    "bbox": line["bbox"],
+                                    "value": None
+                                }
+                        # If text might be a value (no colon, not empty, not just an asterisk)
+                        elif text and text.strip('* '):
+                            # Look for nearby field
+                            for field_name, field_info in field_map.items():
+                                if abs(y_pos - field_info["y_pos"]) < 20:  # Adjust threshold as needed
+                                    field_map[field_name]["value"] = text.strip('* ')
+            
+            # Add collected form fields to result
+            for field_name, field_info in field_map.items():
+                if field_info["value"]:  # Only add if we found a value
+                    form_content[page_key]["form_fields"][field_name] = {
+                        "value": field_info["value"],
+                        "bbox": field_info["bbox"],
+                        "position": {
+                            "x": field_info["bbox"][0],
+                            "y": field_info["bbox"][1]
+                        }
+                    }
+            
+            # Handle checkboxes separately
+            for block in text_blocks:
+                if "lines" in block:
+                    for line in block["lines"]:
+                        text = " ".join(span["text"] for span in line["spans"]).strip()
                         if any(keyword in text for keyword in ["OK", "Erfolgreich", "Zugang", "Ja", "Nein"]):
                             rect = fitz.Rect(line["bbox"])
                             left_area = fitz.Rect(rect.x0 - 20, rect.y0, rect.x0, rect.y1)
@@ -398,40 +420,15 @@ def get_checkboxes():
                             
                             if has_mark_in_area(pix):
                                 form_content[page_key]["checkboxes"].append({
-                                    'name': text,
-                                    'value': True,  # It's checked
+                                    'name': text.strip('* :'),
+                                    'value': True,
                                     'y_pos': rect.y0,
                                     'x_pos': rect.x0,
                                     'bbox': [rect.x0, rect.y0, rect.x1, rect.y1],
                                     'detection_method': 'visual'
                                 })
-                        
-                        # Look for form fields
-                        if ':' in text:
-                            field_name, field_value = text.split(':', 1)
-                            field_name = field_name.strip()
-                            field_value = field_value.strip()
-                            
-                            # If no direct value after colon, look for nearby text
-                            if not field_value or field_value == '*':
-                                bbox = line["bbox"]
-                                # Look for value in nearby positions
-                                for y_pos, value in value_map.items():
-                                    if abs(y_pos - bbox[1]) < 20 and value != field_name:
-                                        field_value = value
-                                        break
-                            
-                            if field_value and field_value != '*':  # Only add if we found a real value
-                                form_content[page_key]["form_fields"][field_name] = {
-                                    "value": field_value,
-                                    "bbox": line["bbox"],
-                                    "position": {
-                                        "x": line["bbox"][0],
-                                        "y": line["bbox"][1]
-                                    }
-                                }
             
-            # Sort checkboxes by vertical position
+            # Sort checkboxes by position
             form_content[page_key]["checkboxes"].sort(key=lambda x: (x['y_pos'], x['x_pos']))
         
         doc.close()
