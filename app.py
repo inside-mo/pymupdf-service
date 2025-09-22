@@ -454,54 +454,6 @@ def has_mark_in_area(pixmap):
             pixel_count += 1
     
     return pixel_count > (pixmap.width * pixmap.height * 0.1)  # 10% threshold
-@app.route('/api/extract-all-fields', methods=['POST'])
-@auth.login_required
-def extract_all_fields():
-    if 'pdf_file' not in request.files:
-        return jsonify({"error": "No file part"}), 400
-    
-    file = request.files['pdf_file']
-    
-    try:
-        doc = fitz.open(stream=file.read(), filetype="pdf")
-        results = {}
-        
-        for page in doc:
-            blocks = page.get_text("dict")["blocks"]
-            
-            for i, block in enumerate(blocks):
-                if "lines" not in block:
-                    continue
-                    
-                for line in block["lines"]:
-                    text = " ".join(span["text"] for span in line["spans"]).strip()
-                    
-                    # Case 1: Numbered items
-                    if re.match(r'^\d+\.\d+\.\d+\s', text):
-                        label = text
-                        value = find_checkbox_value(blocks, line["bbox"])
-                        if value:
-                            results[label] = value
-                            
-                    # Case 2: Question/Comment fields (ending with colon)
-                    elif text.endswith(':'):
-                        label = text.rstrip(':')
-                        # Look for answer in next block or lines
-                        value = find_field_value(blocks, i, line["bbox"])
-                        if value:
-                            results[label] = value
-                            
-                    # Case 3: "Bemerkungen" fields
-                    elif text.startswith('Bemerkungen'):
-                        label = text
-                        value = find_field_value(blocks, i, line["bbox"])
-                        if value:
-                            results[label] = value
-        
-        return jsonify(results)
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 def find_checkbox_value(blocks, label_bbox):
     """Find closest OK/Nicht OK value to the label"""
