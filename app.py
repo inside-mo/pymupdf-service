@@ -403,39 +403,57 @@ def extract_text():
 @app.route('/api/get-checkboxes', methods=['POST'])
 @auth.login_required
 def get_checkboxes():
-    if 'pdf_file' not in request.files:
-        return jsonify({"error": "No file part"}), 400
-    
-    file = request.files['pdf_file']
-    if file.filename == '':
-        return jsonify({"error": "No selected file"}), 400
-    
+    # ... [existing code]
     try:
         doc = fitz.open(stream=file.read(), filetype="pdf")
         checkbox_content = []
         
         for page_num in range(len(doc)):
             page = doc[page_num]
+            
+            # 1. Try widget detection (existing)
             fields = page.widgets()
             
-            for field in fields:
-                if field.field_type == fitz.PDF_WIDGET_TYPE_CHECKBOX:
-                    rect = field.rect
-                    checkbox_content.append({
-                        'name': field.field_name,
-                        'value': field.field_value,
-                        'y_pos': rect.y0,
-                        'x_pos': rect.x0,
-                        'page': page_num + 1
-                    })
+            # 2. Add visual detection for specific text patterns
+            text_blocks = page.get_text("dict")["blocks"]
+            for block in text_blocks:
+                if "lines" in block:
+                    for line in block["lines"]:
+                        text = " ".join(span["text"] for span in line["spans"])
+                        # Look for your specific options
+                        if text in ["Wartung erfolgreich", "Kein Zugang", "Standort existiert nicht"]:
+                            # Get the surrounding area
+                            rect = fitz.Rect(line["bbox"])
+                            # Check for marks in the area left of the text
+                            left_area = fitz.Rect(rect.x0 - 20, rect.y0, rect.x0, rect.y1)
+                            
+                            # Get pixel data for the checkbox area
+                            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=left_area)
+                            # Analyze pixels for marks (simplified)
+                            if has_mark_in_area(pix):
+                                checkbox_content.append({
+                                    'name': text,
+                                    'value': True,
+                                    'y_pos': rect.y0,
+                                    'x_pos': rect.x0,
+                                    'page': page_num + 1,
+                                    'detection_method': 'visual'
+                                })
             
-        # Sort by page and position
-        checkbox_content.sort(key=lambda x: (x['page'], x['y_pos'], x['x_pos']))
         return jsonify(checkbox_content)
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
+def has_mark_in_area(pixmap):
+    # Convert pixmap to bytes and analyze for dark pixels
+    # You might need to adjust these thresholds
+    samples = pixmap.samples
+    pixel_count = 0
+    dark_threshold = 200  # Adjust based on your PDF
+    
+    for i in range(0, len(samples), pixmap.n):
+        if samples[i] < dark_threshold:  # For grayscale
+            pixel_count += 1
+    
+    return pixel_count > (pixmap.width * pixmap.height * 0.1)  # 10% threshold
 @app.route('/api/extract-all-fields', methods=['POST'])
 @auth.login_required
 def extract_all_fields():
