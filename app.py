@@ -329,7 +329,13 @@ def extract_text():
 @app.route('/api/get-checkboxes', methods=['POST'])
 @auth.login_required
 def get_checkboxes():
-    # ... [existing code]
+    if 'pdf_file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    
+    file = request.files['pdf_file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    
     try:
         doc = fitz.open(stream=file.read(), filetype="pdf")
         checkbox_content = []
@@ -365,21 +371,12 @@ def get_checkboxes():
                                     'page': page_num + 1,
                                     'detection_method': 'visual'
                                 })
-            
+        
+        doc.close()  # Make sure to close the document
         return jsonify(checkbox_content)
-
-def has_mark_in_area(pixmap):
-    # Convert pixmap to bytes and analyze for dark pixels
-    # You might need to adjust these thresholds
-    samples = pixmap.samples
-    pixel_count = 0
-    dark_threshold = 200  # Adjust based on your PDF
-    
-    for i in range(0, len(samples), pixmap.n):
-        if samples[i] < dark_threshold:  # For grayscale
-            pixel_count += 1
-    
-    return pixel_count > (pixmap.width * pixmap.height * 0.1)  # 10% threshold
+        
+    except Exception as e:
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 @app.route('/api/extract-all-fields', methods=['POST'])
 @auth.login_required
