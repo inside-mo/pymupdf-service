@@ -351,11 +351,13 @@ def get_checkboxes():
     
     try:
         doc = fitz.open(stream=file.read(), filetype="pdf")
-        form_content = {}
+        result = []
         
+        # Process each page
         for page_num in range(len(doc)):
+            page = doc[page_num]
             page_key = f"page_{page_num + 1}"
-            form_content[page_key] = {
+            page_data = {
                 "page_number": page_num + 1,
                 "checkboxes": [],
                 "form_fields": {},
@@ -364,78 +366,71 @@ def get_checkboxes():
                     "filetype": "application/pdf"
                 }
             }
-        
-        for page_num in range(len(doc)):
-            page = doc[page_num]
-            page_key = f"page_{page_num + 1}"
             
-            # Create a mapping of y-positions to field names and values
-            field_map = {}
-            text_blocks = page.get_text("dict")["blocks"]
+            # Simple visual detection for all checkboxes
+            text = page.get_text("text")
+            text_dict = page.get_text("dict")
             
-            # First pass: Collect all text elements
-            for block in text_blocks:
+            # Process all blocks
+            for block in text_dict["blocks"]:
                 if "lines" in block:
                     for line in block["lines"]:
-                        y_pos = line["bbox"][1]  # Y position as key
-                        text = " ".join(span["text"] for span in line["spans"]).strip()
+                        line_text = " ".join([span["text"] for span in line["spans"]])
                         
-                        # If text contains a field name
-                        if ':' in text:
-                            field_name = text.split(':')[0].strip()
-                            if field_name not in field_map:
-                                field_map[field_name] = {
-                                    "y_pos": y_pos,
-                                    "bbox": line["bbox"],
-                                    "value": None
-                                }
-                        # If text might be a value (no colon, not empty, not just an asterisk)
-                        elif text and text.strip('* '):
-                            # Look for nearby field
-                            for field_name, field_info in field_map.items():
-                                if abs(y_pos - field_info["y_pos"]) < 20:  # Adjust threshold as needed
-                                    field_map[field_name]["value"] = text.strip('* ')
-            
-            # Add collected form fields to result
-            for field_name, field_info in field_map.items():
-                if field_info["value"]:  # Only add if we found a value
-                    form_content[page_key]["form_fields"][field_name] = {
-                        "value": field_info["value"],
-                        "bbox": field_info["bbox"],
-                        "position": {
-                            "x": field_info["bbox"][0],
-                            "y": field_info["bbox"][1]
-                        }
-                    }
-            
-            # Handle checkboxes separately
-            for block in text_blocks:
-                if "lines" in block:
-                    for line in block["lines"]:
-                        text = " ".join(span["text"] for span in line["spans"]).strip()
-                        if any(keyword in text for keyword in ["OK", "Erfolgreich", "Zugang", "Ja", "Nein"]):
-                            rect = fitz.Rect(line["bbox"])
-                            left_area = fitz.Rect(rect.x0 - 20, rect.y0, rect.x0, rect.y1)
-                            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=left_area)
+                        # Check for checkbox indicators
+                        checkbox_keywords = ["OK", "Erfolgreich", "Zugang", "Wartung", "Standort", "Schlüssel"]
+                        if any(keyword in line_text for keyword in checkbox_keywords):
+                            # Get bounding box
+                            bbox = line["bbox"]
                             
-                            if has_mark_in_area(pix):
-                                form_content[page_key]["checkboxes"].append({
-                                    'name': text.strip('* :'),
-                                    'value': True,
-                                    'y_pos': rect.y0,
-                                    'x_pos': rect.x0,
-                                    'bbox': [rect.x0, rect.y0, rect.x1, rect.y1],
-                                    'detection_method': 'visual'
-                                })
+                            # Simple visual check - look for marks in a 20px area left of text
+                            try:
+                                left_area = fitz.Rect(bbox[0] - 20, bbox[1], bbox[0], bbox[3])
+                                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=left_area)
+                                
+                                # Count dark pixels
+                                samples = pix.samples
+                                dark_pixels = sum(1 for i in range(0, len(samples), pix.n) if samples[i] < 200)
+                                pixel_count = pix.width * pix.height
+                                
+                                # If more than 5% dark pixels, likely a mark
+                                if dark_pixels > pixel_count * 0.05:
+                                    page_data["checkboxes"].append({
+                                        "name": line_text.strip(),
+                                        "value": True,
+                                        "x_pos": bbox[0],
+                                        "y_pos": bbox[1],
+                                        "bbox": [bbox[0], bbox[1], bbox[2], bbox[3]],
+                                        "detection_method": "visual"
+                                    })
+                            except Exception as e:
+                                # Continue even if visual check fails
+                                pass
+                        
+                        # Simple form field detection - any line with a colon
+                        if ":" in line_text and len(line_text.split(":")) == 2:
+                            field_name, field_value = line_text.split(":", 1)
+                            field_name = field_name.strip()
+                            field_value = field_value.strip()
+                            
+                            # Only store if value isn't empty or just asterisk
+                            if field_value and field_value != "*":
+                                page_data["form_fields"][field_name] = {
+                                    "value": field_value,
+                                    "bbox": line["bbox"],
+                                    "position": {"x": line["bbox"][0], "y": line["bbox"][1]}
+                                }
             
-            # Sort checkboxes by position
-            form_content[page_key]["checkboxes"].sort(key=lambda x: (x['y_pos'], x['x_pos']))
+            result.append(page_data)
         
         doc.close()
-        return jsonify(form_content)
+        return jsonify(result)
         
     except Exception as e:
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+        return jsonify({
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
     
 @app.route('/api/redact', methods=['POST'])
 @auth.login_required
