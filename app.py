@@ -351,13 +351,25 @@ def get_checkboxes():
     
     try:
         doc = fitz.open(stream=file.read(), filetype="pdf")
-        form_content = {
-            "checkboxes": [],
-            "form_fields": {}
-        }
+        form_content = {}
         
+        # Initialize structure for each page
+        for page_num in range(len(doc)):
+            page_key = f"page_{page_num + 1}"
+            form_content[page_key] = {
+                "page_number": page_num + 1,
+                "checkboxes": [],
+                "form_fields": {},
+                "metadata": {
+                    "filename": file.filename,
+                    "filetype": "application/pdf"
+                }
+            }
+        
+        # Process each page
         for page_num in range(len(doc)):
             page = doc[page_num]
+            page_key = f"page_{page_num + 1}"
             
             # 1. Get all text blocks to find form fields
             text_blocks = page.get_text("dict")["blocks"]
@@ -373,12 +385,12 @@ def get_checkboxes():
                             pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=left_area)
                             
                             if has_mark_in_area(pix):
-                                form_content["checkboxes"].append({
+                                form_content[page_key]["checkboxes"].append({
                                     'name': text,
                                     'value': True,
                                     'y_pos': rect.y0,
                                     'x_pos': rect.x0,
-                                    'page': page_num + 1,
+                                    'bbox': [rect.x0, rect.y0, rect.x1, rect.y1],
                                     'detection_method': 'visual'
                                 })
                         
@@ -389,9 +401,9 @@ def get_checkboxes():
                                 field_name = parts[0].strip()
                                 field_value = parts[1].strip()
                                 if field_value:  # Only add if there's a value
-                                    form_content["form_fields"][field_name] = {
+                                    form_content[page_key]["form_fields"][field_name] = {
                                         "value": field_value,
-                                        "page": page_num + 1,
+                                        "bbox": line["bbox"],
                                         "position": {
                                             "x": line["bbox"][0],
                                             "y": line["bbox"][1]
@@ -406,31 +418,34 @@ def get_checkboxes():
                 field_value = field.field_value
                 
                 if field_type == fitz.PDF_WIDGET_TYPE_CHECKBOX:
-                    form_content["checkboxes"].append({
+                    form_content[page_key]["checkboxes"].append({
                         'name': field_name,
                         'value': bool(field_value),
                         'y_pos': field.rect.y0,
                         'x_pos': field.rect.x0,
-                        'page': page_num + 1,
+                        'bbox': [field.rect.x0, field.rect.y0, field.rect.x1, field.rect.y1],
                         'detection_method': 'widget'
                     })
                 else:
                     # Other form field types (text, choice, etc.)
-                    form_content["form_fields"][field_name] = {
+                    form_content[page_key]["form_fields"][field_name] = {
                         "value": field_value,
                         "type": field_type,
-                        "page": page_num + 1,
+                        "bbox": [field.rect.x0, field.rect.y0, field.rect.x1, field.rect.y1],
                         "position": {
                             "x": field.rect.x0,
                             "y": field.rect.y0
                         }
                     }
-        
+            
+            # Sort checkboxes by vertical position within each page
+            form_content[page_key]["checkboxes"].sort(key=lambda x: (x['y_pos'], x['x_pos']))
+            
         doc.close()
         return jsonify(form_content)
         
     except Exception as e:
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500 
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 def find_checkbox_value(blocks, label_bbox):
     """Find closest OK/Nicht OK value to the label"""
