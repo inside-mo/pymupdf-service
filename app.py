@@ -352,6 +352,24 @@ def has_mark_in_area(pixmap):
     
     return pixel_count > (pixmap.width * pixmap.height * 0.05)  # Reduced to 5% threshold for better sensitivity
 
+def has_mark_in_area(pixmap):
+    """More selective detection of checkbox marks"""
+    samples = pixmap.samples
+    pixel_count = 0
+    dark_threshold = 150  # More strict threshold for dark pixels
+    
+    # Count dark pixels
+    for i in range(0, len(samples), pixmap.n):
+        if samples[i] < dark_threshold:  # For grayscale
+            pixel_count += 1
+    
+    # Calculate density
+    density = pixel_count / (pixmap.width * pixmap.height)
+    
+    # Check for density pattern - checkboxes typically have between 10-40% dark pixels
+    # Too few = no mark, too many = likely just text/lines
+    return 0.1 < density < 0.4  # More selective range
+
 @app.route('/api/get-checkboxes', methods=['POST'])
 @auth.login_required
 def get_checkboxes():
@@ -383,55 +401,58 @@ def get_checkboxes():
                         'detection_method': 'widget'
                     })
             
-            # 2. Add visual detection for all potential checkbox text
+            # 2. Add visual detection for checkbox text
             text_blocks = page.get_text("dict")["blocks"]
             for block in text_blocks:
                 if "lines" in block:
                     for line in block["lines"]:
                         text = " ".join(span["text"] for span in line["spans"]).strip()
                         
-                        # Skip empty lines or very long text (unlikely to be checkbox labels)
-                        if not text or len(text) > 100:
+                        # Skip empty lines
+                        if not text:
                             continue
                             
-                        # Identify potential checkbox text by common indicators
-                        checkbox_indicators = ["OK", "Nicht OK", "Ja", "Nein", "erfolgreich", "Zugang", 
-                                              "vorhanden", "beschädigt", "verschmutzt", "geprüft",
-                                              "erforderlich", "korrekt", "falsch"]
-                        
-                        is_likely_checkbox = any(indicator in text for indicator in checkbox_indicators)
-                        
-                        # Also look for patterns like options with short text
-                        is_option_like = (len(text) < 50 and not text.endswith(':') and
-                                          not text[0].isdigit() and not ':' in text)
-                        
-                        if is_likely_checkbox or is_option_like:
-                            # Get the surrounding area
-                            rect = fitz.Rect(line["bbox"])
-                            # Check for marks in the area left of the text
-                            left_area = fitz.Rect(rect.x0 - 20, rect.y0, rect.x0, rect.y1)
+                        # Skip lines that are likely not checkbox options
+                        if len(text) > 60 or (':' in text and '.' not in text) or text.endswith(':'):
+                            continue
                             
-                            # Get pixel data for the checkbox area
-                            try:
-                                pix = page.get_pixmap(matrix=fitz.Matrix(3, 3), clip=left_area)
-                                # Analyze pixels for marks
-                                if has_mark_in_area(pix):
-                                    checkbox_content.append({
-                                        'name': text,
-                                        'value': True,
-                                        'y_pos': rect.y0,
-                                        'x_pos': rect.x0,
-                                        'page': page_num + 1,
-                                        'detection_method': 'visual'
-                                    })
-                            except Exception as check_error:
-                                # Skip this item if pixmap extraction fails
-                                continue
+                        # Get the surrounding area
+                        rect = fitz.Rect(line["bbox"])
+                        
+                        # Only check a small square area to the left (where checkbox would be)
+                        # This helps avoid detecting text as marks
+                        checkbox_width = min(15, rect.height)  # Limit to reasonable checkbox size
+                        left_area = fitz.Rect(
+                            rect.x0 - checkbox_width - 5,  # 5px spacing
+                            rect.y0 + (rect.height - checkbox_width)/2,  # Centered vertically
+                            rect.x0 - 5,  # 5px spacing
+                            rect.y0 + (rect.height - checkbox_width)/2 + checkbox_width
+                        )
+                        
+                        try:
+                            # Higher resolution for better detection
+                            pix = page.get_pixmap(matrix=fitz.Matrix(4, 4), clip=left_area)
+                            
+                            # Debug option - save image to check what we're analyzing
+                            # Uncomment to debug
+                            # pix.save(f"checkbox_{page_num}_{rect.y0}.png")
+                            
+                            if has_mark_in_area(pix):
+                                checkbox_content.append({
+                                    'name': text,
+                                    'value': True,
+                                    'y_pos': rect.y0,
+                                    'x_pos': rect.x0,
+                                    'page': page_num + 1,
+                                    'detection_method': 'visual'
+                                })
+                        except Exception as check_error:
+                            continue
         
         # Sort results by page and position
         checkbox_content.sort(key=lambda x: (x['page'], x['y_pos'], x['x_pos']))
         
-        doc.close()  # Make sure to close the document
+        doc.close()
         return jsonify(checkbox_content)
         
     except Exception as e:
