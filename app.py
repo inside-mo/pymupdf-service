@@ -80,113 +80,39 @@ def upload_file():
 def extract_pages():
     if 'pdf_file' not in request.files:
         return jsonify({"error": "No file part"}), 400
-    
     file = request.files['pdf_file']
     if file.filename == '':
         return jsonify({"error": "No selected file"}), 400
-    
-    # Get page ranges from request
     page_start = request.form.get('page_start', type=int)
     page_end = request.form.get('page_end', type=int)
-    
-    # Validate page range parameters
     if page_start is None or page_end is None:
         return jsonify({"error": "Both page_start and page_end must be provided"}), 400
     if page_start < 1 or page_end < 1:
         return jsonify({"error": "page_start and page_end must be positive integers"}), 400
     if page_start > page_end:
         return jsonify({"error": "page_start cannot be greater than page_end"}), 400
-
     try:
         # Open the original PDF
         pdf = fitz.open(stream=file.read(), filetype="pdf")
         total_pages = pdf.page_count
-        
         # Adjust page_end if it exceeds total_pages
         if page_end > total_pages:
             page_end = total_pages
-            
         # Create a new PDF to hold the extracted pages
         new_pdf = fitz.open()
-        
-        # Dictionary to store metadata about extracted pages
-        extraction_info = {
-            "original_filename": file.filename,
-            "total_pages_original": total_pages,
-            "pages_extracted": {},
-            "extraction_summary": {
-                "requested_range": f"{page_start}-{page_end}",
-                "pages_processed": 0,
-                "success": False
-            }
-        }
-        
-        # Extract pages and gather information
-        for page_num in range(page_start - 1, page_end):  # Convert to 0-based indexing
-            try:
-                # Insert the page into new PDF
-                new_pdf.insert_pdf(pdf, from_page=page_num, to_page=page_num)
-                
-                # Get page information
-                page = pdf[page_num]
-                page_info = {
-                    "original_page_number": page_num + 1,
-                    "new_page_number": len(new_pdf),
-                    "size": {"width": page.rect.width, "height": page.rect.height},
-                    "rotation": page.rotation,
-                    "status": "success"
-                }
-                
-                # Store page information
-                extraction_info["pages_extracted"][f"page_{page_num + 1}"] = page_info
-                extraction_info["extraction_summary"]["pages_processed"] += 1
-                
-            except Exception as page_error:
-                # Log any page-specific errors
-                extraction_info["pages_extracted"][f"page_{page_num + 1}"] = {
-                    "original_page_number": page_num + 1,
-                    "status": "failed",
-                    "error": str(page_error)
-                }
-        
-        # Update extraction summary
-        extraction_info["extraction_summary"]["success"] = True
-        extraction_info["extraction_summary"]["total_pages_extracted"] = len(new_pdf)
-        
+        for page_num in range(page_start, page_end + 1):
+            new_pdf.insert_pdf(pdf, from_page=page_num - 1, to_page=page_num - 1)  # Zero-based indexing
         # Prepare the PDF to be returned
         pdf_stream = io.BytesIO()
-        new_pdf.save(pdf_stream, deflate=True)  # Use compression
+        new_pdf.save(pdf_stream)  # Save to an in-memory stream
         new_pdf.close()
-        pdf.close()
-        
-        # Add PDF metadata to info
-        pdf_stream.seek(0)
-        
-        # Create response with both PDF and metadata
-        response = jsonify(extraction_info)
-        response.headers['X-Extraction-Info'] = json.dumps({
-            "pages_processed": extraction_info["extraction_summary"]["pages_processed"],
-            "success": extraction_info["extraction_summary"]["success"]
-        })
-        
-        # Return the PDF file
-        return send_file(
-            pdf_stream,
-            as_attachment=True,
-            download_name=f"extracted_pages_{page_start}-{page_end}.pdf",
-            mimetype='application/pdf'
-        )
-
+        pdf_stream.seek(0)  # Reset stream position to the beginning
+        return send_file(pdf_stream, as_attachment=True, download_name="extracted_pages.pdf", mimetype='application/pdf')
     except Exception as e:
-        error_response = {
-            "error": str(e),
-            "traceback": traceback.format_exc(),
-            "context": {
-                "file": file.filename,
-                "page_range": f"{page_start}-{page_end}"
-            }
-        }
-        return jsonify(error_response), 500
+        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=6000, debug=True)
 
 @app.route('/api/extract-text', methods=['POST'])
 @auth.login_required
@@ -454,6 +380,55 @@ def has_mark_in_area(pixmap):
             pixel_count += 1
     
     return pixel_count > (pixmap.width * pixmap.height * 0.1)  # 10% threshold
+
+@app.route('/api/extract-all-fields', methods=['POST'])
+@auth.login_required
+def extract_all_fields():
+    if 'pdf_file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    
+    file = request.files['pdf_file']
+    
+    try:
+        doc = fitz.open(stream=file.read(), filetype="pdf")
+        results = {}
+        
+        for page in doc:
+            blocks = page.get_text("dict")["blocks"]
+            
+            for i, block in enumerate(blocks):
+                if "lines" not in block:
+                    continue
+                    
+                for line in block["lines"]:
+                    text = " ".join(span["text"] for span in line["spans"]).strip()
+                    
+                    # Case 1: Numbered items
+                    if re.match(r'^\d+\.\d+\.\d+\s', text):
+                        label = text
+                        value = find_checkbox_value(blocks, line["bbox"])
+                        if value:
+                            results[label] = value
+                            
+                    # Case 2: Question/Comment fields (ending with colon)
+                    elif text.endswith(':'):
+                        label = text.rstrip(':')
+                        # Look for answer in next block or lines
+                        value = find_field_value(blocks, i, line["bbox"])
+                        if value:
+                            results[label] = value
+                            
+                    # Case 3: "Bemerkungen" fields
+                    elif text.startswith('Bemerkungen'):
+                        label = text
+                        value = find_field_value(blocks, i, line["bbox"])
+                        if value:
+                            results[label] = value
+        
+        return jsonify(results)
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 def find_checkbox_value(blocks, label_bbox):
     """Find closest OK/Nicht OK value to the label"""
